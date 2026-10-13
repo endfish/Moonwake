@@ -42,6 +42,8 @@ The maintenance script fetches assets at the international commit pinned in `res
 
 Resource preparation also applies the Moonwake logo and the terminology overlay in `resources/zh-cn-overrides.json`. To update an existing development asset directory after editing that overlay, run `scripts/apply-brand-assets.ps1 -AssetDirectory <asset-directory>`. The new core defaults to Moonwake Blue; existing user themes are preserved.
 
+Native menu entries use an ice-blue M prefix. Plugins using the former default red D prefix also receive the new default, while custom prefixes remain intact. Plugin lists and notifications use the Moonwake crescent when a plugin has no icon of its own.
+
 Run `scripts/check-localization.ps1 -SourceRoot <prepared-Dalamud-directory> -AssetDirectory <asset-directory>` to check translated UI keys, chat-channel labels and style-color labels. Chat labels follow the CN client's terminology; Debug retains its original label. Technical identifiers and font names retain their original spelling.
 
 The host is a Windows GUI executable with a `requireAdministrator` manifest. Double-clicking requests elevation without creating a console window; the Windows prompt must be handled by the user. Run EXE CLI calls from an elevated shell and pipe them to `Out-Host`, or redirect output from an elevated parent process. `scripts/check-shell.ps1` verifies the compiled GUI subsystem and administrator manifest, then tests CLI output through the managed assembly without requesting interactive elevation on a build agent.

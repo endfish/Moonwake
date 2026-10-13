@@ -1,0 +1,211 @@
+diff --git a/Dalamud.Test/Game/Gui/ContextMenu/MenuItemPrefixTests.cs b/Dalamud.Test/Game/Gui/ContextMenu/MenuItemPrefixTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Game/Gui/ContextMenu/MenuItemPrefixTests.cs
+@@ -0,0 +1,51 @@
++using System.Linq;
++
++using Dalamud.Game.Gui.ContextMenu;
++using Dalamud.Game.Text;
++using Dalamud.Game.Text.SeStringHandling.Payloads;
++
++using Xunit;
++
++namespace Dalamud.Test.Game.Gui.ContextMenu;
++
++public class MenuItemPrefixTests
++{
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void LegacyDefaultFromCompiledPluginUsesMoonwakeBrand(bool useDefaultPrefix)
++    {
++        var name = global::Dalamud.Game.Gui.ContextMenu.ContextMenu.GetPrefixedName(new MenuItem
++        {
++            Name = "Plugin action",
++            Prefix = SeIconChar.BoxedLetterD,
++            PrefixColor = 539,
++            UseDefaultPrefix = useDefaultPrefix,
++        });
++
++        Assert.Equal(SeIconChar.BoxedLetterM.ToIconString() + " Plugin action", name.TextValue);
++        Assert.Equal((ushort)517, name.Payloads.OfType<UIForegroundPayload>().First().ColorKey);
++    }
++
++    [Fact]
++    public void CustomPluginBrandIsPreserved()
++    {
++        var name = global::Dalamud.Game.Gui.ContextMenu.ContextMenu.GetPrefixedName(new MenuItem
++        {
++            Name = "Plugin action",
++            Prefix = SeIconChar.BoxedLetterP,
++            PrefixColor = 56,
++        });
++
++        Assert.Equal(SeIconChar.BoxedLetterP.ToIconString() + " Plugin action", name.TextValue);
++        Assert.Equal((ushort)56, name.Payloads.OfType<UIForegroundPayload>().First().ColorKey);
++    }
++
++    [Fact]
++    public void UnprefixedSubmenuEntryStaysUnprefixed()
++    {
++        var name = global::Dalamud.Game.Gui.ContextMenu.ContextMenu.GetPrefixedName(new MenuItem { Name = "Plugin action" });
++        Assert.Equal("Plugin action", name.TextValue);
++        Assert.Empty(name.Payloads.OfType<UIForegroundPayload>());
++    }
++}
+diff --git a/Dalamud/Game/Gui/ContextMenu/ContextMenu.cs b/Dalamud/Game/Gui/ContextMenu/ContextMenu.cs
+--- a/Dalamud/Game/Gui/ContextMenu/ContextMenu.cs
++++ b/Dalamud/Game/Gui/ContextMenu/ContextMenu.cs
+@@ -133,13 +133,25 @@
+     /// </summary>
+     /// <param name="menuItem">The menu item to prefix.</param>
+     /// <returns>The prefixed name.</returns>
+-    internal SeString GetPrefixedName(IMenuItem menuItem) =>
+-        menuItem.Prefix is { } prefix
+-            ? new SeStringBuilder()
+-              .AddUiForeground($"{prefix.ToIconString()} ", menuItem.PrefixColor)
+-              .Append(menuItem.Name)
+-              .Build()
+-            : menuItem.Name;
++    internal static SeString GetPrefixedName(IMenuItem menuItem)
++    {
++        var prefix = menuItem.Prefix;
++        var color = menuItem.PrefixColor;
++
++        // Public constants are inlined into plugin binaries. Recognize the former default pair as well.
++        if (menuItem.UseDefaultPrefix || (prefix == SeIconChar.BoxedLetterD && color == 539))
++        {
++            prefix = IMenuItem.DalamudDefaultPrefix;
++            color = IMenuItem.DalamudDefaultPrefixColor;
++        }
++
++        return prefix is { } icon
++                   ? new SeStringBuilder()
++                     .AddUiForeground($"{icon.ToIconString()} ", color)
++                     .Append(menuItem.Name)
++                     .Build()
++                   : menuItem.Name;
++    }
+ 
+     private AtkValue* ExpandContextMenuArray(Span<AtkValue> oldValues, int newSize)
+     {
+@@ -250,7 +262,7 @@
+             if (item.IsSubmenu)
+                 submenuMask |= 1u << i;
+ 
+-            nameData[i].SetManagedString(this.GetPrefixedName(item).EncodeWithNullTerminator());
++            nameData[i].SetManagedString(GetPrefixedName(item).EncodeWithNullTerminator());
+         }
+ 
+         for (var i = 0; i < prefixMenuSize; ++i)
+@@ -411,8 +423,8 @@
+             var submenuItems = orderedItems[(maxMenuItems - nativeMenuSize - 1)..];
+             return newItems.Append(new MenuItem
+             {
+-                Prefix = SeIconChar.BoxedLetterD,
+-                PrefixColor = 539,
++                Prefix = IMenuItem.DalamudDefaultPrefix,
++                PrefixColor = IMenuItem.DalamudDefaultPrefixColor,
+                 IsSubmenu = true,
+                 Priority = int.MaxValue,
+                 Name = $"See More ({submenuItems.Length})",
+diff --git a/Dalamud/Game/Gui/ContextMenu/MenuItem.cs b/Dalamud/Game/Gui/ContextMenu/MenuItem.cs
+--- a/Dalamud/Game/Gui/ContextMenu/MenuItem.cs
++++ b/Dalamud/Game/Gui/ContextMenu/MenuItem.cs
+@@ -13,12 +13,12 @@
+     /// <summary>
+     /// The default prefix used if no specific preset is specified.
+     /// </summary>
+-    const SeIconChar DalamudDefaultPrefix = SeIconChar.BoxedLetterD;
++    const SeIconChar DalamudDefaultPrefix = SeIconChar.BoxedLetterM;
+ 
+     /// <summary>
+     /// The default prefix color used if no specific preset is specified.
+     /// </summary>
+-    const ushort DalamudDefaultPrefixColor = 539;
++    const ushort DalamudDefaultPrefixColor = 517;
+ 
+     /// <summary>
+     /// Gets or sets the display name of the menu item.
+diff --git a/Dalamud/Game/Internal/LobbyProfileHandler.cs b/Dalamud/Game/Internal/LobbyProfileHandler.cs
+--- a/Dalamud/Game/Internal/LobbyProfileHandler.cs
++++ b/Dalamud/Game/Internal/LobbyProfileHandler.cs
+@@ -7,6 +7,7 @@
+ using Dalamud.Game.Agent;
+ using Dalamud.Game.Agent.AgentArgTypes;
+ using Dalamud.Game.Gui;
++using Dalamud.Game.Gui.ContextMenu;
+ using Dalamud.Game.Text;
+ using Dalamud.Logging.Internal;
+ using Dalamud.Plugin.Internal.Profiles;
+@@ -112,8 +113,8 @@
+             using var rssb = new RentedSeStringBuilder();
+ 
+             addonSelectYesno->PromptText->SetText(rssb.Builder
+-                .PushColorType(539)
+-                .Append($"{SeIconChar.BoxedLetterD.ToIconString()} ")
++                .PushColorType(IMenuItem.DalamudDefaultPrefixColor)
++                .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
+                 .PopColorType()
+                 .Append(this.LocDalamudLoadingPluginsForCharacter)
+                 .GetViewAsSpan());
+diff --git a/Dalamud/Game/Internal/SystemMenuIntegration.cs b/Dalamud/Game/Internal/SystemMenuIntegration.cs
+--- a/Dalamud/Game/Internal/SystemMenuIntegration.cs
++++ b/Dalamud/Game/Internal/SystemMenuIntegration.cs
+@@ -1,6 +1,7 @@
+ using CheapLoc;
+ 
+ using Dalamud.Configuration.Internal;
++using Dalamud.Game.Gui.ContextMenu;
+ using Dalamud.Game.Text;
+ using Dalamud.Hooking;
+ using Dalamud.Interface.Internal;
+@@ -147,14 +148,14 @@
+         values[3].SetInt(newMenuSize);
+ 
+         // set our new entries to dummy commands
+-        const int color = 539;
++        const int color = IMenuItem.DalamudDefaultPrefixColor;
+         using var rssb = new RentedSeStringBuilder();
+         var entryIndex = startIndex;
+ 
+         values[entryIndex].SetInt(69420);
+         values[entryIndex + maxEntries].SetManagedString(rssb.Builder
+             .PushColorType(color)
+-            .Append($"{SeIconChar.BoxedLetterD.ToIconString()} ")
++            .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
+             .PopColorType()
+             .Append(this.LocDalamudPlugins)
+             .GetViewAsSpan());
+@@ -165,7 +166,7 @@
+         values[entryIndex].SetInt(69421);
+         values[entryIndex + maxEntries].SetManagedString(rssb.Builder
+             .PushColorType(color)
+-            .Append($"{SeIconChar.BoxedLetterD.ToIconString()} ")
++            .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
+             .PopColorType()
+             .Append(this.LocDalamudSettings)
+             .GetViewAsSpan());
+diff --git a/Dalamud/Game/Internal/TitleScreenVersionInfo.cs b/Dalamud/Game/Internal/TitleScreenVersionInfo.cs
+--- a/Dalamud/Game/Internal/TitleScreenVersionInfo.cs
++++ b/Dalamud/Game/Internal/TitleScreenVersionInfo.cs
+@@ -2,6 +2,7 @@
+ using Dalamud.Game.Addon.Lifecycle;
+ using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
+ using Dalamud.Game.Gui;
++using Dalamud.Game.Gui.ContextMenu;
+ using Dalamud.Game.Text;
+ using Dalamud.Logging.Internal;
+ using Dalamud.Plugin.Internal;
+@@ -109,8 +110,8 @@
+             .Append(new ReadOnlySeStringSpan(addon->AtkValues[1].String.Value))
+             .Append("\n\n")
+             .PushEdgeColorType(701)
+-            .PushColorType(539)
+-            .Append(SeIconChar.BoxedLetterD.ToIconChar())
++            .PushColorType(IMenuItem.DalamudDefaultPrefixColor)
++            .Append(IMenuItem.DalamudDefaultPrefix.ToIconChar())
+             .PopColorType()
+             .PopEdgeColorType()
+             .Append($" Dalamud: {Versioning.GetScmVersion()}")
