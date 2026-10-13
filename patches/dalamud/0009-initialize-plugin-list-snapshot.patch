@@ -1,0 +1,48 @@
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+@@ -181,6 +181,9 @@
+             pluginManager.OnAvailablePluginsChanged += this.OnAvailablePluginsChanged;
+             pluginManager.OnInstalledPluginsChanged += this.OnInstalledPluginsChanged;
+ 
++            // The initial repository download may already have completed before this window was created.
++            this.OnAvailablePluginsChanged();
++
+             for (var i = 0; i < this.testerImagePaths.Length; i++)
+             {
+                 this.testerImagePaths[i] = string.Empty;
+@@ -293,6 +296,7 @@
+         var pluginManager = Service<PluginManager>.Get();
+ 
+         // Opening the window reuses the current snapshot; refresh is explicit or scheduled.
++        this.OnAvailablePluginsChanged();
+         _ = pluginManager.ScanDevPluginsAsync();
+ 
+         this.adaptiveSort = true;
+@@ -4180,11 +4184,11 @@
+     {
+         var pluginManager = Service<PluginManager>.Get();
+         var configuration = Service<DalamudConfiguration>.Get();
++        using var pmLock = pluginManager.GetSyncScope();
+ 
+         using (this.listLock.EnterScope())
+         {
+-            // By removing installed plugins only when the available plugin list changes (basically when the window is
+-            // opened), plugins that have been newly installed remain in the available plugin list as installed.
++            // Copy the current in-memory snapshot; synchronizing this view never requests repository metadata.
+             this.pluginListAvailable = pluginManager.AvailablePlugins.ToList();
+             this.pluginListUpdatable = pluginManager.UpdatablePlugins.ToList();
+             this.ResortPlugins();
+diff --git a/Dalamud/Plugin/Internal/PluginManager.cs b/Dalamud/Plugin/Internal/PluginManager.cs
+--- a/Dalamud/Plugin/Internal/PluginManager.cs
++++ b/Dalamud/Plugin/Internal/PluginManager.cs
+@@ -1856,7 +1856,8 @@
+         {
+             using (Timings.Start("PM Load Plugin Repos"))
+             {
+-                _ = this.SetPluginReposFromConfigAsync(false);
++                // Publish the first completed snapshot to windows opened while repositories are still loading.
++                _ = this.SetPluginReposFromConfigAsync(true);
+                 this.OnInstalledPluginsChanged += () => Task.Run(Troubleshooting.LogTroubleshooting);
+ 
+                 Log.Information("Repos loaded!");
