@@ -5,8 +5,9 @@ using Moonwake.Infrastructure;
 namespace Moonwake.Services;
 
 internal sealed record ImportPlugin(string Name, string VersionDirectory);
-internal sealed record ImportPlan(string SourceRoot, IReadOnlyList<ImportPlugin> Plugins, IReadOnlyList<string> Repositories, int SkippedPlugins);
-internal sealed record ImportResult(int Plugins, int ConfigurationItems, int Repositories, int ExistingPlugins);
+internal sealed record ImportDevPlugin(string Path, string Name, string? Nickname, bool IsEnabled, bool NotifyForErrors, bool AutomaticReloading);
+internal sealed record ImportPlan(string SourceRoot, IReadOnlyList<ImportPlugin> Plugins, IReadOnlyList<string> Repositories, int SkippedPlugins, IReadOnlyList<ImportDevPlugin> DevelopmentPlugins, int SkippedDevelopmentPlugins);
+internal sealed record ImportResult(int Plugins, int ConfigurationItems, int Repositories, int ExistingPlugins, int DevelopmentPlugins);
 
 /// <summary>Copies selected data into an isolated profile; never executes or edits source plugins.</summary>
 internal sealed class ProfileImportService(StandalonePaths paths)
@@ -52,6 +53,8 @@ internal sealed class ProfileImportService(StandalonePaths paths)
         }
 
         var repositories = new List<string>();
+        var developmentPlugins = new List<ImportDevPlugin>();
+        var skippedDevelopment = 0;
         var configurationPath = Path.Combine(root, "dalamudConfig.json");
         if (File.Exists(configurationPath))
         {
@@ -64,11 +67,32 @@ internal sealed class ProfileImportService(StandalonePaths paths)
                     if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo))
                         repositories.Add(url!);
                 }
+            if (ConfigurationArray(config, "DevPluginLoadLocations") is { } locations)
+                foreach (var location in locations.OfType<JsonObject>())
+                {
+                    var path = location["Path"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || !File.Exists(path) || !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    { skippedDevelopment++; continue; }
+                    path = Path.GetFullPath(path);
+                    var manifestPath = Path.ChangeExtension(path, ".json");
+                    if (!File.Exists(manifestPath)) { skippedDevelopment++; continue; }
+                    RejectLinks(path);
+                    RejectLinks(manifestPath);
+                    var manifest = ReadObject(manifestPath);
+                    var name = manifest["InternalName"]?.GetValue<string>();
+                    if (manifest["DalamudApiLevel"]?.GetValue<int>() != 15 || string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name is "." or "..")
+                    { skippedDevelopment++; continue; }
+                    if (developmentPlugins.Any(plugin => string.Equals(plugin.Path, path, StringComparison.OrdinalIgnoreCase))) continue;
+                    var settings = (config["DevPluginSettings"] as JsonObject)?.FirstOrDefault(item =>
+                        item.Key != "$type" && Path.IsPathFullyQualified(item.Key) && string.Equals(Path.GetFullPath(item.Key), path, StringComparison.OrdinalIgnoreCase)).Value as JsonObject;
+                    developmentPlugins.Add(new ImportDevPlugin(path, name, location["Nickname"]?.GetValue<string>(), location["IsEnabled"]?.GetValue<bool>() ?? true,
+                        settings?["NotifyForErrors"]?.GetValue<bool>() ?? true, settings?["AutomaticReloading"]?.GetValue<bool>() ?? false));
+                }
         }
-        return new ImportPlan(root, plugins, repositories.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), skipped);
+        return new ImportPlan(root, plugins, repositories.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), skipped, developmentPlugins, skippedDevelopment);
     }
 
-    public ImportResult Import(ImportPlan plan, bool includeConfiguration, IReadOnlyCollection<string> selectedRepositories)
+    public ImportResult Import(ImportPlan plan, bool includeConfiguration, IReadOnlyCollection<string> selectedRepositories, bool includeDevelopmentPlugins = false)
     {
         RejectOverlap(plan.SourceRoot, paths.HomeDirectory);
         if (selectedRepositories.Any(url => !plan.Repositories.Contains(url, StringComparer.OrdinalIgnoreCase)))
@@ -101,13 +125,18 @@ internal sealed class ProfileImportService(StandalonePaths paths)
             moves.Add((stagedRoot, destination, true));
             pluginCount++;
             if (!includeConfiguration) continue;
+            StageConfiguration(plugin.Name);
+        }
+
+        void StageConfiguration(string pluginName)
+        {
             var sourceConfigs = Path.Combine(plan.SourceRoot, "pluginConfigs");
             if (Directory.Exists(sourceConfigs)) RejectLinks(sourceConfigs);
-            foreach (var name in new[] { plugin.Name, plugin.Name + ".json" })
+            foreach (var name in new[] { pluginName, pluginName + ".json" })
             {
                 var from = Path.Combine(sourceConfigs, name);
                 var to = Path.Combine(paths.PluginConfigurationsDirectory, name);
-                if (Directory.Exists(to) || File.Exists(to)) continue;
+                if (Directory.Exists(to) || File.Exists(to) || moves.Any(move => string.Equals(move.Destination, to, StringComparison.OrdinalIgnoreCase))) continue;
                 var staged = Path.Combine(stage, "pluginConfigs", name);
                 if (Directory.Exists(from)) { CopyTree(from, staged); moves.Add((staged, to, true)); configurationCount++; }
                 else if (File.Exists(from))
@@ -134,8 +163,32 @@ internal sealed class ProfileImportService(StandalonePaths paths)
             repositories.Add(new JsonObject { ["Url"] = url, ["IsEnabled"] = true });
             addedRepos++;
         }
+        var addedDevelopment = 0;
+        if (includeDevelopmentPlugins && plan.DevelopmentPlugins.Count > 0)
+        {
+            var locations = ConfigurationArray(global, "DevPluginLoadLocations") ?? new JsonArray();
+            if (global["DevPluginLoadLocations"] is null) global["DevPluginLoadLocations"] = locations;
+            var settings = global["DevPluginSettings"] as JsonObject ?? new JsonObject();
+            if (global["DevPluginSettings"] is null) global["DevPluginSettings"] = settings;
+            foreach (var plugin in plan.DevelopmentPlugins)
+            {
+                if (locations.OfType<JsonObject>().Any(item => item["Path"]?.GetValue<string>() is { } path &&
+                    Path.IsPathFullyQualified(path) && string.Equals(Path.GetFullPath(path), plugin.Path, StringComparison.OrdinalIgnoreCase))) continue;
+                locations.Add(new JsonObject { ["Path"] = plugin.Path, ["IsEnabled"] = plugin.IsEnabled, ["Nickname"] = plugin.Nickname });
+                settings[plugin.Path] = new JsonObject
+                {
+                    ["StartOnBoot"] = false,
+                    ["NotifyForErrors"] = plugin.NotifyForErrors,
+                    ["AutomaticReloading"] = plugin.AutomaticReloading,
+                    ["WorkingPluginId"] = Guid.NewGuid().ToString(),
+                };
+                if (includeConfiguration) StageConfiguration(plugin.Name);
+                addedDevelopment++;
+            }
+            if (addedDevelopment > 0) global["DevMode"] = true;
+        }
         var applied = new List<(string Source, string Destination, bool Directory)>();
-        var writeConfig = addedRepos > 0;
+        var writeConfig = addedRepos > 0 || addedDevelopment > 0;
         if (writeConfig && original is not null) File.WriteAllText(Path.Combine(stage, "dalamudConfig.before.json"), original);
         try
         {
@@ -162,17 +215,19 @@ internal sealed class ProfileImportService(StandalonePaths paths)
             }
             throw;
         }
-        return new ImportResult(pluginCount, configurationCount, addedRepos, existing);
+        return new ImportResult(pluginCount, configurationCount, addedRepos, existing, addedDevelopment);
     }
 
     private static JsonObject ReadObject(string file) => JsonNode.Parse(File.ReadAllText(file))?.AsObject() ?? throw new InvalidDataException("配置内容为空。");
 
-    private static JsonArray? RepositoryArray(JsonObject configuration) => configuration["ThirdRepoList"] switch
+    private static JsonArray? RepositoryArray(JsonObject configuration) => ConfigurationArray(configuration, "ThirdRepoList");
+
+    private static JsonArray? ConfigurationArray(JsonObject configuration, string key) => configuration[key] switch
     {
         null => null,
         JsonArray array => array,
         JsonObject wrapper when wrapper["$values"] is JsonArray array => array,
-        _ => throw new InvalidDataException("插件仓库列表格式无效。"),
+        _ => throw new InvalidDataException($"配置列表 {key} 格式无效。"),
     };
 
     private static void CopyTree(string source, string destination)

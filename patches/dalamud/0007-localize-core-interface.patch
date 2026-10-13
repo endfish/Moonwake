@@ -1,0 +1,716 @@
+diff --git a/Dalamud/Interface/ImGuiFileDialog/FileDialog.UI.cs b/Dalamud/Interface/ImGuiFileDialog/FileDialog.UI.cs
+index 7dbc13e41..8ff618bda 100644
+--- a/Dalamud/Interface/ImGuiFileDialog/FileDialog.UI.cs
++++ b/Dalamud/Interface/ImGuiFileDialog/FileDialog.UI.cs
+@@ -3,6 +3,8 @@ using System.IO;
+ using System.Linq;
+ using System.Numerics;
+ 
++using CheapLoc;
++
+ using Dalamud.Bindings.ImGui;
+ using Dalamud.Interface.Internal;
+ using Dalamud.Interface.Utility;
+@@ -213,7 +215,7 @@ public partial class FileDialog
+ 
+         if (ImGui.IsItemHovered())
+         {
+-            ImGui.SetTooltip("Reset to current directory"u8);
++            ImGui.SetTooltip(Loc.Localize("MoonwakeFileResettocurrentdirectory", "Reset to current directory"));
+         }
+ 
+         ImGui.SameLine();
+@@ -223,7 +225,7 @@ public partial class FileDialog
+         if (!this.createDirectoryMode)
+         {
+             ImGui.SameLine();
+-            ImGui.Text("Search :"u8);
++            ImGui.Text(Loc.Localize("MoonwakeFileSearch", "Search :"));
+             ImGui.SameLine();
+             ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+             if (ImGui.InputText("##InputImGuiFileDialogSearchField"u8, ref this.searchBuffer, 255))
+@@ -248,13 +250,13 @@ public partial class FileDialog
+ 
+         if (ImGui.IsItemHovered())
+         {
+-            ImGui.SetTooltip("Create Directory"u8);
++            ImGui.SetTooltip(Loc.Localize("MoonwakeFileCreateDirectory", "Create Directory"));
+         }
+ 
+         if (this.createDirectoryMode)
+         {
+             ImGui.SameLine();
+-            ImGui.Text("New Directory Name"u8);
++            ImGui.Text(Loc.Localize("MoonwakeFileNewDirectoryName", "New Directory Name"));
+ 
+             ImGui.SameLine();
+             ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - Scaled(100));
+@@ -262,7 +264,7 @@ public partial class FileDialog
+ 
+             ImGui.SameLine();
+ 
+-            if (ImGui.Button("Ok"u8))
++            if (ImGui.Button(Loc.Localize("MoonwakeFileOk", "Ok")))
+             {
+                 if (this.CreateDir(this.createDirectoryBuffer))
+                 {
+@@ -274,7 +276,7 @@ public partial class FileDialog
+ 
+             ImGui.SameLine();
+ 
+-            if (ImGui.Button("Cancel"u8))
++            if (ImGui.Button(Loc.Localize("MoonwakeFileCancel", "Cancel")))
+             {
+                 this.createDirectoryMode = false;
+             }
+@@ -356,10 +358,10 @@ public partial class FileDialog
+             var hideSize = this.flags.HasFlag(ImGuiFileDialogFlags.HideColumnSize);
+             var hideDate = this.flags.HasFlag(ImGuiFileDialogFlags.HideColumnDate);
+ 
+-            ImGui.TableSetupColumn(" File Name"u8, ImGuiTableColumnFlags.WidthStretch, -1, 0);
+-            ImGui.TableSetupColumn("Type"u8, ImGuiTableColumnFlags.WidthFixed | (hideType ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 1);
+-            ImGui.TableSetupColumn("Size"u8, ImGuiTableColumnFlags.WidthFixed | (hideSize ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 2);
+-            ImGui.TableSetupColumn("Date"u8, ImGuiTableColumnFlags.WidthFixed | (hideDate ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 3);
++            ImGui.TableSetupColumn(Loc.Localize("MoonwakeFileFileName", " File Name"), ImGuiTableColumnFlags.WidthStretch, -1, 0);
++            ImGui.TableSetupColumn(Loc.Localize("MoonwakeFileType", "Type"), ImGuiTableColumnFlags.WidthFixed | (hideType ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 1);
++            ImGui.TableSetupColumn(Loc.Localize("MoonwakeFileSize", "Size"), ImGuiTableColumnFlags.WidthFixed | (hideSize ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 2);
++            ImGui.TableSetupColumn(Loc.Localize("MoonwakeFileDate", "Date"), ImGuiTableColumnFlags.WidthFixed | (hideDate ? ImGuiTableColumnFlags.DefaultHide : ImGuiTableColumnFlags.None), -1, 3);
+ 
+             ImGui.TableNextRow(ImGuiTableRowFlags.Headers);
+             for (var column = 0; column < 4; column++)
+@@ -650,7 +652,7 @@ public partial class FileDialog
+         }
+         else
+         {
+-            this.fileNameBuffer = $"{this.selectedFileNames.Count} files Selected";
++            this.fileNameBuffer = string.Format(Loc.Localize("MoonwakeFileSelectedCount", "{0} files selected"), this.selectedFileNames.Count);
+         }
+ 
+         this.SelectionChanged(this, this.GetFilePathName());
+@@ -669,7 +671,7 @@ public partial class FileDialog
+         }
+         else
+         {
+-            this.fileNameBuffer = $"{this.selectedFileNames.Count} files Selected";
++            this.fileNameBuffer = string.Format(Loc.Localize("MoonwakeFileSelectedCount", "{0} files selected"), this.selectedFileNames.Count);
+         }
+     }
+ 
+@@ -679,11 +681,11 @@ public partial class FileDialog
+ 
+         if (this.IsDirectoryMode())
+         {
+-            ImGui.Text("Directory Path :"u8);
++            ImGui.Text(Loc.Localize("MoonwakeFileDirectoryPath", "Directory Path :"));
+         }
+         else
+         {
+-            ImGui.Text("File Name :"u8);
++            ImGui.Text(Loc.Localize("MoonwakeFileFileName", "File Name :"));
+         }
+ 
+         ImGui.SameLine();
+@@ -739,7 +741,7 @@ public partial class FileDialog
+         var disableOk = string.IsNullOrEmpty(this.fileNameBuffer) || (selectOnly && !this.IsItemSelected());
+         if (disableOk) ImGui.PushStyleVar(ImGuiStyleVar.Alpha, 0.5f);
+ 
+-        if (ImGui.Button("Ok"u8) && !disableOk)
++        if (ImGui.Button(Loc.Localize("MoonwakeFileOk", "Ok")) && !disableOk)
+         {
+             this.isOk = true;
+             res = true;
+@@ -749,7 +751,7 @@ public partial class FileDialog
+ 
+         ImGui.SameLine();
+ 
+-        if (ImGui.Button("Cancel"u8))
++        if (ImGui.Button(Loc.Localize("MoonwakeFileCancel", "Cancel")))
+         {
+             this.isOk = false;
+             res = true;
+@@ -795,15 +797,15 @@ public partial class FileDialog
+                 this.okResultToConfirm = true;
+             }
+ 
+-            var name = $"The file Already Exists !##{this.title}{this.id}OverWriteDialog";
++            var name = Loc.Localize("MoonwakeFileExists", "File already exists") + $"##{this.title}{this.id}OverWriteDialog";
+             var res = false;
+             var open = true;
+ 
+             ImGui.OpenPopup(name);
+             if (ImGui.BeginPopupModal(name, ref open, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove))
+             {
+-                ImGui.Text("Would you like to Overwrite it ?"u8);
+-                if (ImGui.Button("Confirm"u8))
++                ImGui.Text(Loc.Localize("MoonwakeFileWouldyouliketoOverwriteit", "Would you like to Overwrite it ?"));
++                if (ImGui.Button(Loc.Localize("MoonwakeFileConfirm", "Confirm")))
+                 {
+                     this.okResultToConfirm = false;
+                     this.isOk = true;
+@@ -812,7 +814,7 @@ public partial class FileDialog
+                 }
+ 
+                 ImGui.SameLine();
+-                if (ImGui.Button("Cancel"u8))
++                if (ImGui.Button(Loc.Localize("MoonwakeFileCancel", "Cancel")))
+                 {
+                     this.okResultToConfirm = false;
+                     this.isOk = false;
+diff --git a/Dalamud/Interface/ImGuiFontChooserDialog/SingleFontChooserDialog.cs b/Dalamud/Interface/ImGuiFontChooserDialog/SingleFontChooserDialog.cs
+index 0b9fc5a48..3fd74ea76 100644
+--- a/Dalamud/Interface/ImGuiFontChooserDialog/SingleFontChooserDialog.cs
++++ b/Dalamud/Interface/ImGuiFontChooserDialog/SingleFontChooserDialog.cs
+@@ -5,6 +5,8 @@ using System.Text;
+ using System.Threading;
+ using System.Threading.Tasks;
+ 
++using CheapLoc;
++
+ using Dalamud.Bindings.ImGui;
+ using Dalamud.Configuration.Internal;
+ using Dalamud.Interface.Colors;
+@@ -125,7 +127,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+     private SingleFontChooserDialog(IFontAtlas newAsyncAtlas)
+     {
+         this.counter = Interlocked.Increment(ref counterStatic);
+-        this.title = "Choose a font...";
++        this.title = Loc.Localize("MoonwakeFontChooseafont", "Choose a font...");
+         this.popupImGuiName = $"{this.title}##{nameof(SingleFontChooserDialog)}[{this.counter}]";
+         this.atlas = newAsyncAtlas;
+         this.selectedFont = new() { FontId = DalamudDefaultFontAndFamilyId.Instance };
+@@ -392,10 +394,10 @@ public sealed class SingleFontChooserDialog : IDisposable
+         var baseOffset = ImGui.GetCursorPos() - windowPad;
+ 
+         var actionSize = Vector2.Zero;
+-        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize("OK"u8));
+-        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize("Cancel"u8));
+-        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize("Refresh"u8));
+-        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize("Reset"u8));
++        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontOK", "OK")));
++        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontCancel", "Cancel")));
++        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontRefresh", "Refresh")));
++        actionSize = Vector2.Max(actionSize, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontReset", "Reset")));
+         actionSize += framePad * 2;
+ 
+         var bodySize = ImGui.GetContentRegionAvail();
+@@ -471,15 +473,15 @@ public sealed class SingleFontChooserDialog : IDisposable
+             ImGui.PushStyleColor(ImGuiCol.HeaderHovered, Vector4.Zero);
+             ImGui.PushStyleColor(ImGuiCol.HeaderActive, Vector4.Zero);
+             ImGui.TableSetupColumn(
+-                "Font:##familyColumn"u8,
++                Loc.Localize("MoonwakeFontFontfamilyColumn", "Font:##familyColumn"),
+                 ImGuiTableColumnFlags.WidthStretch,
+                 0.4f);
+             ImGui.TableSetupColumn(
+-                "Style:##fontColumn"u8,
++                Loc.Localize("MoonwakeFontStylefontColumn", "Style:##fontColumn"),
+                 ImGuiTableColumnFlags.WidthStretch,
+                 0.4f);
+             ImGui.TableSetupColumn(
+-                "Size:##sizeColumn"u8,
++                Loc.Localize("MoonwakeFontSizesizeColumn", "Size:##sizeColumn"),
+                 ImGuiTableColumnFlags.WidthStretch,
+                 0.2f);
+             ImGui.TableHeadersRow();
+@@ -511,7 +513,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+ 
+         ImGui.EndChild();
+ 
+-        ImGui.Checkbox("Show advanced options"u8, ref this.useAdvancedOptions);
++        ImGui.Checkbox(Loc.Localize("MoonwakeFontShowadvancedoptions", "Show advanced options"), ref this.useAdvancedOptions);
+         if (this.useAdvancedOptions)
+         {
+             if (this.DrawAdvancedOptions())
+@@ -540,7 +542,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+         if (this.fontHandle is null)
+         {
+             ImGui.SetCursorPos(ImGui.GetCursorPos() + ImGui.GetStyle().FramePadding);
+-            ImGui.Text("Select a font."u8);
++            ImGui.Text(Loc.Localize("MoonwakeFontSelectafont", "Select a font."));
+         }
+         else if (this.fontHandle.LoadException is { } loadException)
+         {
+@@ -552,7 +554,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+         else if (!this.fontHandle.Available)
+         {
+             ImGui.SetCursorPos(ImGui.GetCursorPos() + ImGui.GetStyle().FramePadding);
+-            ImGui.Text("Loading font..."u8);
++            ImGui.Text(Loc.Localize("MoonwakeFontLoadingfont", "Loading font..."));
+         }
+         else
+         {
+@@ -572,14 +574,14 @@ public sealed class SingleFontChooserDialog : IDisposable
+         if (this.fontFamilies?.IsCompleted is not true)
+         {
+             ImGui.SetScrollY(0);
+-            ImGui.Text("Loading..."u8);
++            ImGui.Text(Loc.Localize("MoonwakeFontLoading", "Loading..."));
+             return false;
+         }
+ 
+         if (!this.fontFamilies.IsCompletedSuccessfully)
+         {
+             ImGui.SetScrollY(0);
+-            ImGui.Text("Error: " + this.fontFamilies.Exception);
++            ImGui.Text(Loc.Localize("MoonwakeFontError", "Error: ") + this.fontFamilies.Exception);
+             return false;
+         }
+ 
+@@ -736,13 +738,13 @@ public sealed class SingleFontChooserDialog : IDisposable
+     {
+         if (this.fontFamilies?.IsCompleted is not true)
+         {
+-            ImGui.Text("Loading..."u8);
++            ImGui.Text(Loc.Localize("MoonwakeFontLoading", "Loading..."));
+             return changed;
+         }
+ 
+         if (!this.fontFamilies.IsCompletedSuccessfully)
+         {
+-            ImGui.Text("Error: " + this.fontFamilies.Exception);
++            ImGui.Text(Loc.Localize("MoonwakeFontError", "Error: ") + this.fontFamilies.Exception);
+             return changed;
+         }
+ 
+@@ -1028,9 +1030,9 @@ public sealed class SingleFontChooserDialog : IDisposable
+         if (!ImGui.BeginTable("##advancedOptions"u8, 4))
+             return false;
+ 
+-        var labelWidth = ImGui.CalcTextSize("Letter Spacing:"u8).X;
+-        labelWidth = Math.Max(labelWidth, ImGui.CalcTextSize("Offset:"u8).X);
+-        labelWidth = Math.Max(labelWidth, ImGui.CalcTextSize("Line Height:"u8).X);
++        var labelWidth = ImGui.CalcTextSize(Loc.Localize("MoonwakeFontLetterSpacing", "Letter Spacing:")).X;
++        labelWidth = Math.Max(labelWidth, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontOffset", "Offset:")).X);
++        labelWidth = Math.Max(labelWidth, ImGui.CalcTextSize(Loc.Localize("MoonwakeFontLineHeight", "Line Height:")).X);
+         labelWidth += ImGui.GetStyle().FramePadding.X;
+ 
+         var inputWidth = ImGui.CalcTextSize("000.000"u8).X + (ImGui.GetStyle().FramePadding.X * 2);
+@@ -1054,7 +1056,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+         ImGui.TableNextRow();
+         ImGui.TableNextColumn();
+         ImGui.AlignTextToFramePadding();
+-        ImGui.Text("Offset:"u8);
++        ImGui.Text(Loc.Localize("MoonwakeFontOffset", "Offset:"));
+ 
+         ImGui.TableNextColumn();
+         if (FloatInputText(
+@@ -1085,7 +1087,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+         ImGui.TableNextRow();
+         ImGui.TableNextColumn();
+         ImGui.AlignTextToFramePadding();
+-        ImGui.Text("Letter Spacing:"u8);
++        ImGui.Text(Loc.Localize("MoonwakeFontLetterSpacing", "Letter Spacing:"));
+ 
+         ImGui.TableNextColumn();
+         if (FloatInputText(
+@@ -1100,7 +1102,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+         ImGui.TableNextRow();
+         ImGui.TableNextColumn();
+         ImGui.AlignTextToFramePadding();
+-        ImGui.Text("Line Height:"u8);
++        ImGui.Text(Loc.Localize("MoonwakeFontLineHeight", "Line Height:"));
+ 
+         ImGui.TableNextColumn();
+         if (FloatInputText(
+@@ -1174,15 +1176,15 @@ public sealed class SingleFontChooserDialog : IDisposable
+             || this.FontFamilyExcludeFilter?.Invoke(this.selectedFont.FontId.Family) is true)
+         {
+             ImGui.BeginDisabled();
+-            ImGui.Button("OK"u8, buttonSize);
++            ImGui.Button(Loc.Localize("MoonwakeFontOK", "OK"), buttonSize);
+             ImGui.EndDisabled();
+         }
+-        else if (ImGui.Button("OK"u8, buttonSize))
++        else if (ImGui.Button(Loc.Localize("MoonwakeFontOK", "OK"), buttonSize))
+         {
+             this.tcs.SetResult(this.selectedFont);
+         }
+ 
+-        if (ImGui.Button("Cancel"u8, buttonSize))
++        if (ImGui.Button(Loc.Localize("MoonwakeFontCancel", "Cancel"), buttonSize))
+         {
+             this.Cancel();
+         }
+@@ -1193,10 +1195,10 @@ public sealed class SingleFontChooserDialog : IDisposable
+         {
+             isFirst = doRefresh = this.fontFamilies is null;
+             ImGui.BeginDisabled();
+-            ImGui.Button("Refresh"u8, buttonSize);
++            ImGui.Button(Loc.Localize("MoonwakeFontRefresh", "Refresh"), buttonSize);
+             ImGui.EndDisabled();
+         }
+-        else if (ImGui.Button("Refresh"u8, buttonSize))
++        else if (ImGui.Button(Loc.Localize("MoonwakeFontRefresh", "Refresh"), buttonSize))
+         {
+             doRefresh = true;
+         }
+@@ -1233,7 +1235,7 @@ public sealed class SingleFontChooserDialog : IDisposable
+ 
+         if (this.useAdvancedOptions)
+         {
+-            if (ImGui.Button("Reset"u8, buttonSize))
++            if (ImGui.Button(Loc.Localize("MoonwakeFontReset", "Reset"), buttonSize))
+             {
+                 this.selectedFont = this.selectedFont with
+                 {
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+index 9a3ea5d39..b07485402 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+@@ -721,7 +721,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+         var headerText = Locs.Header_Hint;
+         var headerTextSize = ImGui.CalcTextSize(headerText);
+         ImGui.Text(headerText);
+-        ImGui.TextColored(ImGuiColors.AttentionForeground, "插件使用过程中出现问题请优先通过内置反馈或GitHub Issue进行");
++        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("MoonwakeRepositorySupportHint", "Contact the plugin or repository maintainer for plugin support."));
+ 
+         ImGui.SameLine();
+ 
+@@ -1850,7 +1850,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+                         break;
+ 
+                     default:
+-                        ImGui.Text("You found a mysterious category. Please keep it to yourself."u8);
++                        ImGui.Text(Loc.Localize("MoonwakeInstallerYoufoundamysteriouscategoryPleasekeepittoyourself", "You found a mysterious category. Please keep it to yourself."));
+                         break;
+                 }
+ 
+@@ -1891,7 +1891,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+                         break;
+ 
+                     default:
+-                        ImGui.Text("You found a secret category. Please feel a sense of pride and accomplishment."u8);
++                        ImGui.Text(Loc.Localize("MoonwakeInstallerYoufoundasecretcategoryPleasefeelasenseofprideandaccomplishment", "You found a secret category. Please feel a sense of pride and accomplishment."));
+                         break;
+                 }
+ 
+@@ -1912,7 +1912,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+                         break;
+ 
+                     default:
+-                        ImGui.Text("You found a quiet category. Please don't wake it up."u8);
++                        ImGui.Text(Loc.Localize("MoonwakeInstallerYoufoundaquietcategoryPleasedontwakeitup", "You found a quiet category. Please don't wake it up."));
+                         break;
+                 }
+ 
+@@ -2047,7 +2047,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+                         if (!imageTask.IsCompleted)
+                         {
+-                            ImGui.Text("Loading..."u8);
++                            ImGui.Text(Loc.Localize("MoonwakeInstallerLoading", "Loading..."));
+                             continue;
+                         }
+ 
+@@ -2121,7 +2121,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+             if (!imageTask.IsCompleted)
+             {
+-                ImGui.Text("Loading..."u8);
++                ImGui.Text(Loc.Localize("MoonwakeInstallerLoading", "Loading..."));
+                 return;
+             }
+ 
+@@ -3243,7 +3243,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+         if (ImGui.BeginChild("##changelog"u8, new Vector2(-1, 100), true, ImGuiWindowFlags.NoNavFocus | ImGuiWindowFlags.NoNavInputs | ImGuiWindowFlags.AlwaysAutoResize))
+         {
+-            ImGui.Text("Changelog:"u8);
++            ImGui.Text(Loc.Localize("MoonwakeInstallerChangelog", "Changelog:"));
+             ImGuiHelpers.ScaledDummy(2);
+             ImGui.TextWrapped(changelog!);
+         }
+@@ -3759,7 +3759,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+                                 if (ImGui.IsItemHovered())
+                                 {
+-                                    ImGui.SetTooltip("Dismiss this issue"u8);
++                                    ImGui.SetTooltip(Loc.Localize("MoonwakeInstallerDismissthisissue", "Dismiss this issue"));
+                                 }
+                             }
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
+index 95efab124..79c2c7e8f 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
+@@ -147,7 +147,7 @@ internal class ProfileManagerWidget
+                 ImGuiHelpers.ScaledDummy(4);
+                 var buttonWidth = 120f;
+                 ImGui.SetCursorPosX((ImGui.GetWindowWidth() - buttonWidth) / 2);
+-                if (ImGui.Button("OK"u8, new Vector2(buttonWidth, 0)))
++                if (ImGui.Button(Loc.Localize("MoonwakeProfileOK", "OK"), new Vector2(buttonWidth, 0)))
+                 {
+                     ImGui.CloseCurrentPopup();
+                 }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabDtr.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabDtr.cs
+index 18382b1f8..14fdcc023 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabDtr.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabDtr.cs
+@@ -138,11 +138,11 @@ internal sealed class SettingsTabDtr : SettingsTab
+ 
+         ImGui.Text(Loc.Localize("DalamudSettingServerInfoBarSpacing", "Server Info Bar spacing"));
+         ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("DalamudSettingServerInfoBarSpacingHint", "Configure the amount of space between entries in the server info bar here."));
+-        ImGui.SliderInt("Spacing"u8, ref this.dtrSpacing, 0, 40);
++        ImGui.SliderInt(Loc.Localize("MoonwakeDtrSpacing", "Spacing"), ref this.dtrSpacing, 0, 40);
+ 
+         ImGui.Text(Loc.Localize("DalamudSettingServerInfoBarDirection", "Server Info Bar direction"));
+         ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("DalamudSettingServerInfoBarDirectionHint", "If checked, the Server Info Bar elements will expand to the right instead of the left."));
+-        ImGui.Checkbox("Swap Direction"u8, ref this.dtrSwapDirection);
++        ImGui.Checkbox(Loc.Localize("MoonwakeDtrSwapDirection", "Swap Direction"), ref this.dtrSwapDirection);
+ 
+         base.Draw();
+     }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+index 728bb5217..8910b10f1 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+@@ -113,7 +113,7 @@ internal sealed class SettingsTabExperimental : SettingsTab
+                                Service<DalamudConfiguration>.Get().SwapChainHookMode ==
+                                SwapChainHelper.HookMode.ByteCode
+                                    ? string.Empty
+-                                   : "Current option will be ignored and no special ReShade handling will be done, because SwapChain vtable hook mode is set.";
++                                   : Loc.Localize("MoonwakeReShadeIgnored", "Current option is ignored because SwapChain vtable hook mode is set.");
+ 
+                     if (ReShadeAddonInterface.ReShadeIsSignedByReShade)
+                     {
+@@ -129,13 +129,13 @@ internal sealed class SettingsTabExperimental : SettingsTab
+             {
+                 FriendlyEnumNameGetter = x => x switch
+                 {
+-                    ReShadeHandlingMode.Default => "Default",
+-                    ReShadeHandlingMode.UnwrapReShade => "Unwrap",
+-                    ReShadeHandlingMode.ReShadeAddonPresent => "ReShade Addon (present)",
+-                    ReShadeHandlingMode.ReShadeAddonReShadeOverlay => "ReShade Addon (reshade_overlay)",
+-                    ReShadeHandlingMode.HookReShadeDxgiSwapChainOnPresent => "Hook ReShade::DXGISwapChain::OnPresent",
+-                    ReShadeHandlingMode.None => "Do not handle",
+-                    _ => "<invalid>",
++                    ReShadeHandlingMode.Default => Loc.Localize("MoonwakeAdvancedDefault", "Default"),
++                    ReShadeHandlingMode.UnwrapReShade => Loc.Localize("MoonwakeAdvancedUnwrap", "Unwrap"),
++                    ReShadeHandlingMode.ReShadeAddonPresent => Loc.Localize("MoonwakeAdvancedReShadeAddonpresent", "ReShade Addon (present)"),
++                    ReShadeHandlingMode.ReShadeAddonReShadeOverlay => Loc.Localize("MoonwakeAdvancedReShadeAddonreshadeoverlay", "ReShade Addon (reshade_overlay)"),
++                    ReShadeHandlingMode.HookReShadeDxgiSwapChainOnPresent => Loc.Localize("MoonwakeAdvancedHookReShadeDXGISwapChainOnPresent", "Hook ReShade::DXGISwapChain::OnPresent"),
++                    ReShadeHandlingMode.None => Loc.Localize("MoonwakeAdvancedDonothandle", "Do not handle"),
++                    _ => Loc.Localize("MoonwakeAdvancedinvalid", "<invalid>"),
+                 },
+             },
+ 
+@@ -176,7 +176,7 @@ internal sealed class SettingsTabExperimental : SettingsTab
+ 
+         ImGui.TextColoredWrapped(
+             ImGuiColors.DalamudGrey,
+-            "Total memory used by Dalamud & Plugins: " + Util.FormatBytes(GC.GetTotalMemory(false)));
++            string.Format(Loc.Localize("MoonwakeTotalMemory", "Core and plugin memory usage: {0}"), Util.FormatBytes(GC.GetTotalMemory(false))));
+         ImGuiHelpers.ScaledDummy(15);
+     }
+ }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+index 9120f6689..88646cba7 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+@@ -34,7 +34,10 @@ internal sealed class SettingsTabGeneral : SettingsTab
+ 
+                 return null;
+             },
+-            fallbackValue: XivChatType.Debug),
++            fallbackValue: XivChatType.Debug)
++        {
++            FriendlyEnumNameGetter = x => x == XivChatType.Debug ? "Debug" : Loc.Localize($"MoonwakeChat{x}", x.ToString()),
++        },
+ 
+         new GapSettingsEntry(5),
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/DevPluginsSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/DevPluginsSettingsEntry.cs
+index cdbb15e05..a5712b768 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Widgets/DevPluginsSettingsEntry.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/DevPluginsSettingsEntry.cs
+@@ -145,11 +145,11 @@ internal sealed class DevPluginsSettingsEntry : SettingsEntry
+ 
+         ImGui.Text("#"u8);
+         ImGui.NextColumn();
+-        ImGui.Text("Path"u8);
++        ImGui.Text(Loc.Localize("MoonwakeDevPath", "Path"));
+         ImGui.NextColumn();
+-        ImGui.Text("Nickname"u8);
++        ImGui.Text(Loc.Localize("MoonwakeDevNickname", "Nickname"));
+         ImGui.NextColumn();
+-        ImGui.Text("Enabled"u8);
++        ImGui.Text(Loc.Localize("MoonwakeDevEnabled", "Enabled"));
+         ImGui.NextColumn();
+         ImGui.Text(string.Empty);
+         ImGui.NextColumn();
+@@ -200,7 +200,7 @@ internal sealed class DevPluginsSettingsEntry : SettingsEntry
+ 
+             ImGui.SetNextItemWidth(-1);
+             var nickname = devPluginLocationSetting.Nickname ?? string.Empty;
+-            if (ImGui.InputTextWithHint("##devPluginNickname", "Optional...", ref nickname, 64))
++            if (ImGui.InputTextWithHint("##devPluginNickname", Loc.Localize("MoonwakeDevOptional", "Optional..."), ref nickname, 64))
+             {
+                 devPluginLocationSetting.Nickname = string.IsNullOrEmpty(nickname) ? null : nickname;
+             }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+index bba0a4720..9f27318c4 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+@@ -140,9 +140,9 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+ 
+         ImGui.Text("#"u8);
+         ImGui.NextColumn();
+-        ImGui.Text("URL"u8);
++        ImGui.Text(Loc.Localize("MoonwakeRepoURL", "URL"));
+         ImGui.NextColumn();
+-        ImGui.Text("Enabled"u8);
++        ImGui.Text(Loc.Localize("MoonwakeRepoEnabled", "Enabled"));
+         ImGui.NextColumn();
+         ImGui.Text(string.Empty);
+         ImGui.NextColumn();
+diff --git a/Dalamud/Interface/Internal/Windows/StyleEditor/StyleEditorWindow.cs b/Dalamud/Interface/Internal/Windows/StyleEditor/StyleEditorWindow.cs
+index 0c8efcffc..371d3833c 100644
+--- a/Dalamud/Interface/Internal/Windows/StyleEditor/StyleEditorWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/StyleEditor/StyleEditorWindow.cs
+@@ -244,49 +244,49 @@ public class StyleEditorWindow : Window
+                 {
+                     ImGui.SetCursorPosY(ImGui.GetCursorPosY() - 5);
+ 
+-                    changes |= ImGui.SliderFloat2("WindowPadding", ref style.WindowPadding, 0.0f, 20.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat2("FramePadding", ref style.FramePadding, 0.0f, 20.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat2("CellPadding", ref style.CellPadding, 0.0f, 20.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat2("ItemSpacing", ref style.ItemSpacing, 0.0f, 20.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat2("ItemInnerSpacing", ref style.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat2("TouchExtraPadding", ref style.TouchExtraPadding, 0.0f, 10.0f, "%.0f");
+-                    changes |= ImGui.SliderFloat("IndentSpacing"u8, ref style.IndentSpacing, 0.0f, 30.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("ScrollbarSize"u8, ref style.ScrollbarSize, 1.0f, 20.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("GrabMinSize"u8, ref style.GrabMinSize, 1.0f, 20.0f, "%.0f"u8);
+-                    ImGui.Text("Borders"u8);
+-                    changes |= ImGui.SliderFloat("WindowBorderSize"u8, ref style.WindowBorderSize, 0.0f, 1.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("ChildBorderSize"u8, ref style.ChildBorderSize, 0.0f, 1.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("PopupBorderSize"u8, ref style.PopupBorderSize, 0.0f, 1.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("FrameBorderSize"u8, ref style.FrameBorderSize, 0.0f, 1.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("TabBorderSize"u8, ref style.TabBorderSize, 0.0f, 1.0f, "%.0f"u8);
+-                    ImGui.Text("Rounding"u8);
+-                    changes |= ImGui.SliderFloat("WindowRounding"u8, ref style.WindowRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("ChildRounding"u8, ref style.ChildRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("FrameRounding"u8, ref style.FrameRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("PopupRounding"u8, ref style.PopupRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("ScrollbarRounding"u8, ref style.ScrollbarRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("GrabRounding"u8, ref style.GrabRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("LogSliderDeadzone"u8, ref style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f"u8);
+-                    changes |= ImGui.SliderFloat("TabRounding"u8, ref style.TabRounding, 0.0f, 12.0f, "%.0f"u8);
+-                    ImGui.Text("Alignment"u8);
+-                    changes |= ImGui.SliderFloat2("WindowTitleAlign", ref style.WindowTitleAlign, 0.0f, 1.0f, "%.2f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleWindowPadding", "WindowPadding"), ref style.WindowPadding, 0.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleFramePadding", "FramePadding"), ref style.FramePadding, 0.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleCellPadding", "CellPadding"), ref style.CellPadding, 0.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleItemSpacing", "ItemSpacing"), ref style.ItemSpacing, 0.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleItemInnerSpacing", "ItemInnerSpacing"), ref style.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleTouchExtraPadding", "TouchExtraPadding"), ref style.TouchExtraPadding, 0.0f, 10.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleIndentSpacing", "IndentSpacing"), ref style.IndentSpacing, 0.0f, 30.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleScrollbarSize", "ScrollbarSize"), ref style.ScrollbarSize, 1.0f, 20.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleGrabMinSize", "GrabMinSize"), ref style.GrabMinSize, 1.0f, 20.0f, "%.0f");
++                    ImGui.Text(Loc.Localize("MoonwakeStyleBorders", "Borders"));
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleWindowBorderSize", "WindowBorderSize"), ref style.WindowBorderSize, 0.0f, 1.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleChildBorderSize", "ChildBorderSize"), ref style.ChildBorderSize, 0.0f, 1.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStylePopupBorderSize", "PopupBorderSize"), ref style.PopupBorderSize, 0.0f, 1.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleFrameBorderSize", "FrameBorderSize"), ref style.FrameBorderSize, 0.0f, 1.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleTabBorderSize", "TabBorderSize"), ref style.TabBorderSize, 0.0f, 1.0f, "%.0f");
++                    ImGui.Text(Loc.Localize("MoonwakeStyleRounding", "Rounding"));
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleWindowRounding", "WindowRounding"), ref style.WindowRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleChildRounding", "ChildRounding"), ref style.ChildRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleFrameRounding", "FrameRounding"), ref style.FrameRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStylePopupRounding", "PopupRounding"), ref style.PopupRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleScrollbarRounding", "ScrollbarRounding"), ref style.ScrollbarRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleGrabRounding", "GrabRounding"), ref style.GrabRounding, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleLogSliderDeadzone", "LogSliderDeadzone"), ref style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f");
++                    changes |= ImGui.SliderFloat(Loc.Localize("MoonwakeStyleTabRounding", "TabRounding"), ref style.TabRounding, 0.0f, 12.0f, "%.0f");
++                    ImGui.Text(Loc.Localize("MoonwakeStyleAlignment", "Alignment"));
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleWindowTitleAlign", "WindowTitleAlign"), ref style.WindowTitleAlign, 0.0f, 1.0f, "%.2f");
+                     var windowMenuButtonPosition = (int)style.WindowMenuButtonPosition + 1;
+-                    if (ImGui.Combo("WindowMenuButtonPosition"u8, ref windowMenuButtonPosition, ["None", "Left", "Right"]))
++                    if (ImGui.Combo(Loc.Localize("MoonwakeStyleWindowMenuButtonPosition", "WindowMenuButtonPosition"), ref windowMenuButtonPosition, [Loc.Localize("MoonwakeStyleNone", "None"), Loc.Localize("MoonwakeStyleLeft", "Left"), Loc.Localize("MoonwakeStyleRight", "Right")]))
+                     {
+                         style.WindowMenuButtonPosition = (ImGuiDir)(windowMenuButtonPosition - 1);
+                         changes = true;
+                     }
+ 
+-                    changes |= ImGui.SliderFloat2("ButtonTextAlign", ref style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleButtonTextAlign", "ButtonTextAlign"), ref style.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
+                     ImGui.SameLine();
+-                    ImGuiComponents.HelpMarker("Alignment applies when a button is larger than its text content.");
+-                    changes |= ImGui.SliderFloat2("SelectableTextAlign", ref style.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
++                    ImGuiComponents.HelpMarker(Loc.Localize("MoonwakeStyleAlignmentapplieswhenabuttonislargerthanitstextcontent", "Alignment applies when a button is larger than its text content."));
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleSelectableTextAlign", "SelectableTextAlign"), ref style.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
+                     ImGui.SameLine();
+-                    ImGuiComponents.HelpMarker("Alignment applies when a selectable is larger than its text content.");
+-                    changes |= ImGui.SliderFloat2("DisplaySafeAreaPadding", ref style.DisplaySafeAreaPadding, 0.0f, 30.0f, "%.0f");
++                    ImGuiComponents.HelpMarker(Loc.Localize("MoonwakeStyleAlignmentapplieswhenaselectableislargerthanitstextcontent", "Alignment applies when a selectable is larger than its text content."));
++                    changes |= ImGui.SliderFloat2(Loc.Localize("MoonwakeStyleDisplaySafeAreaPadding", "DisplaySafeAreaPadding"), ref style.DisplaySafeAreaPadding, 0.0f, 30.0f, "%.0f");
+                     ImGui.SameLine();
+                     ImGuiComponents.HelpMarker(
+-                        "Adjust if you cannot see the edges of your screen (e.g. on a TV where scaling has not been configured).");
++                        Loc.Localize("MoonwakeStyleAdjustifyoucannotseetheedgesofyourscreenegonaTVwherescalinghasnotbeenconfigured", "Adjust if you cannot see the edges of your screen (e.g. on a TV where scaling has not been configured)."));
+ 
+                     ImGui.EndChild();
+                 }
+@@ -327,7 +327,7 @@ public class StyleEditorWindow : Window
+                         changes |= ImGui.ColorEdit4("##color", ref style.Colors[(int)imGuiCol], ImGuiColorEditFlags.AlphaBar | this.alphaFlags);
+ 
+                         ImGui.SameLine(0.0f, style.ItemInnerSpacing.X);
+-                        ImGui.Text(imGuiCol.ToString());
++                        ImGui.Text(Loc.Localize($"MoonwakeColor{imGuiCol}", imGuiCol.ToString()));
+ 
+                         ImGui.PopID();
+                     }
+@@ -410,7 +410,7 @@ public class StyleEditorWindow : Window
+ 
+                 ImGuiHelpers.ScaledDummy(5);
+ 
+-                ImGui.TextWrapped(Loc.Localize("StyleEditorWindowBgBlurTint", "Background Blur Tint (Active Window)"));
++                ImGui.TextWrapped(Loc.Localize("StyleEditorWindowBgBlurTintActive", "Background Blur Tint (Active Window)"));
+                 var tintActive = workStyleV1.WindowBlurTintActive;
+                 if (ImGui.ColorEdit4(
+                         $"###blurTintActive",
+@@ -430,7 +430,7 @@ public class StyleEditorWindow : Window
+ 
+                 ImGuiHelpers.ScaledDummy(5);
+ 
+-                ImGui.TextWrapped(Loc.Localize("StyleEditorWindowBgBlurTint", "Background Blur Luminosity"));
++                ImGui.TextWrapped(Loc.Localize("StyleEditorWindowBgBlurLuminosity", "Background Blur Luminosity"));
+                 var luminosity = workStyleV1.WindowBlurLuminosity;
+                 if (ImGui.ColorEdit4(
+                         $"###blurLuminosity",
+@@ -491,7 +491,7 @@ public class StyleEditorWindow : Window
+             const float buttonWidth = 120f;
+             ImGui.SetCursorPosX((ImGui.GetWindowWidth() - buttonWidth) / 2);
+ 
+-            if (ImGui.Button("OK"u8, new Vector2(buttonWidth, 40)))
++            if (ImGui.Button(Loc.Localize("MoonwakeStyleOK", "OK"), new Vector2(buttonWidth, 40)))
+             {
+                 config.SavedStyles[this.currentSel].Name = this.renameText;
+                 config.QueueSave();
+diff --git a/Dalamud/Plugin/Internal/Types/LocalDevPlugin.cs b/Dalamud/Plugin/Internal/Types/LocalDevPlugin.cs
+index dc2e9d9a5..0ffe67e3a 100644
+--- a/Dalamud/Plugin/Internal/Types/LocalDevPlugin.cs
++++ b/Dalamud/Plugin/Internal/Types/LocalDevPlugin.cs
+@@ -3,6 +3,8 @@ using System.IO;
+ using System.Threading;
+ using System.Threading.Tasks;
+ 
++using CheapLoc;
++
+ using Dalamud.Configuration;
+ using Dalamud.Configuration.Internal;
+ using Dalamud.Interface.ImGuiNotification;
+@@ -221,12 +223,12 @@ internal sealed class LocalDevPlugin : LocalPlugin
+                     }
+ 
+                     await this.ReloadAsync();
+-                    notificationManager.AddNotification($"The DevPlugin '{this.Name}' was reloaded successfully.", "Plugin reloaded!", NotificationType.Success);
++                    notificationManager.AddNotification(string.Format(Loc.Localize("MoonwakeDevReloadSuccess", "The development plugin '{0}' was reloaded successfully."), this.Name), Loc.Localize("MoonwakeDevReloadSuccessTitle", "Plugin reloaded"), NotificationType.Success);
+                 }
+                 catch (Exception ex)
+                 {
+                     Log.Error(ex, "DevPlugin reload failed.");
+-                    notificationManager.AddNotification($"The DevPlugin '{this.Name} could not be reloaded.", "Plugin reload failed!", NotificationType.Error);
++                    notificationManager.AddNotification(string.Format(Loc.Localize("MoonwakeDevReloadFailed", "The development plugin '{0}' could not be reloaded."), this.Name), Loc.Localize("MoonwakeDevReloadFailedTitle", "Plugin reload failed"), NotificationType.Error);
+                 }
+             },
+             this.fileWatcherTokenSource.Token);

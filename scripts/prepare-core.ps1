@@ -9,7 +9,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $lock = Get-Content -LiteralPath (Join-Path $repoRoot 'upstream.lock.json') -Raw | ConvertFrom-Json
 if (!$OutputRoot) { $OutputRoot = Join-Path $repoRoot '.build/source' }
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
-$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
+$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json'), (Join-Path $repoRoot 'src/Moonwake/Resources/app-icon.ico')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
 $inputHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputFiles | ForEach-Object {(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash}) -join ''))))
 $marker = Join-Path $OutputRoot 'moonwake-source.json'
 if (Test-Path -LiteralPath $OutputRoot) {
@@ -70,6 +70,12 @@ foreach ($spec in @(@('clientstructs',$structs),@('dalamud',$core))) {
         Invoke-Git $spec[1] @('apply','--check','--whitespace=nowarn',$patch.FullName)
         Invoke-Git $spec[1] @('apply','--whitespace=nowarn',$patch.FullName)
     }
+}
+foreach ($project in @('Dalamud.Injector','Dalamud.Boot','DalamudCrashHandler')) {
+    $icon = Join-Path $core "$project/dalamud.ico"
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'src/Moonwake/Resources/app-icon.ico') -Destination $icon
+    # Copy-Item retains source timestamps; mark the resource changed for incremental native and managed builds.
+    [IO.File]::SetLastWriteTimeUtc($icon, [DateTime]::UtcNow)
 }
 @{ inputHash=$inputHash; dalamud=$lock.dalamud.commit; clientStructs=$lock.clientStructs.commit } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8
 Write-Output $core

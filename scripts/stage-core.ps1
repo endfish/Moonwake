@@ -6,12 +6,13 @@ if (!$SourceRoot) { $SourceRoot = Join-Path $repoRoot '.build/source/Dalamud' }
 $source = Join-Path $SourceRoot 'bin/Release'
 $markerPath = Join-Path (Split-Path -Parent $SourceRoot) 'moonwake-source.json'
 $sourceManifest = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
+$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json'), (Join-Path $repoRoot 'src/Moonwake/Resources/app-icon.ico')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
 $expectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputFiles | ForEach-Object {(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash}) -join ''))))
 if ($sourceManifest.inputHash -ne $expectedHash) { throw 'Source inputs differ from current patches. Materialize and build a new source directory.' }
 foreach ($required in @('Dalamud.dll','Dalamud.Boot.dll','Dalamud.Injector.exe','DalamudCrashHandler.exe','cimgui.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $source $required))) { throw "Missing build output: $required" }
 }
+& (Join-Path $PSScriptRoot 'check-core-icons.ps1') -PayloadDirectory $source
 $Destination = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $Destination) { throw 'Destination already exists. Choose a new empty destination.' }
 New-Item -ItemType Directory -Path $Destination | Out-Null

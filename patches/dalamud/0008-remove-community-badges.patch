@@ -1,0 +1,48 @@
+diff --git a/Dalamud/Interface/Internal/Badge/BadgeManager.cs b/Dalamud/Interface/Internal/Badge/BadgeManager.cs
+index 9290d6cc8..38bb16548 100644
+--- a/Dalamud/Interface/Internal/Badge/BadgeManager.cs
++++ b/Dalamud/Interface/Internal/Badge/BadgeManager.cs
+@@ -13,20 +13,8 @@ internal class BadgeManager : IServiceType
+ {
+     private readonly DalamudConfiguration configuration;
+ 
+-    private readonly List<BadgeInfo> badges =
+-    [
+-        new(() => "Test Badge",
+-            () => "Awarded for testing badges.",
+-            0,
+-            "937e8d5fbb48bd4949536cd65b8d35c426b80d2f830c5c308e2cdec422ae2244",
+-            BadgeUnlockMethod.User),
+-
+-        new(() => "Fundraiser #1 Donor",
+-            () => "Awarded for participating in the first patch fundraiser.",
+-            1,
+-            "56e752257bd0cbb2944f95cc7b3cb3d0db15091dd043f7a195ed37028d079322",
+-            BadgeUnlockMethod.User)
+-    ];
++    // Moonwake does not distribute community or fundraiser badges.
++    private readonly List<BadgeInfo> badges = [];
+ 
+     private readonly List<int> unlockedBadgeIndices = [];
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs b/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
+index 4dedae962..f503fcb06 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
+@@ -48,7 +48,6 @@ internal sealed class SettingsWindow : Window
+             new SettingsTabLook(),
+             new SettingsTabAutoUpdates(),
+             new SettingsTabDtr(),
+-            new SettingsTabBadge(),
+             new SettingsTabExperimental(),
+             new SettingsTabAbout()
+         ];
+@@ -65,7 +64,7 @@ internal sealed class SettingsWindow : Window
+     public void OpenTo(SettingsOpenKind kind)
+     {
+         this.IsOpen = true;
+-        this.setActiveTab = this.tabs.Single(tab => tab.Kind == kind);
++        this.setActiveTab = this.tabs.FirstOrDefault(tab => tab.Kind == kind) ?? this.tabs[0];
+     }
+ 
+     /// <summary>

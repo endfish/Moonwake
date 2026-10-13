@@ -84,9 +84,9 @@ internal sealed class LauncherForm : Form
         var title = new BrandHeader { Bounds = new Rectangle(24, 18, 320, 94), BackColor = Color.Transparent };
         title.MouseDown += this.DragWindow;
         this.Controls.Add(title);
-        var close = new Button { Text = "×", Bounds = new Rectangle(355, 17, 30, 30),
+        var close = new CloseButton { Bounds = new Rectangle(355, 17, 30, 30),
             BackColor = Color.Transparent, ForeColor = Muted, FlatStyle = FlatStyle.Flat,
-            Font = new Font("Segoe UI", 16F), Cursor = Cursors.Hand, TabStop = false, AccessibleName = "关闭 Moonwake" };
+            Cursor = Cursors.Hand, TabStop = false, AccessibleName = "关闭 Moonwake" };
         close.FlatAppearance.BorderSize = 0;
         close.FlatAppearance.MouseOverBackColor = Color.FromArgb(30, 41, 48);
         close.FlatAppearance.MouseDownBackColor = Color.FromArgb(54, 39, 45);
@@ -129,9 +129,9 @@ internal sealed class LauncherForm : Form
         this.tooltips.SetToolTip(this.inject, "成功后隐藏窗口；游戏关闭时自动退出，无托盘图标。");
         var import = new LinkLabel
         {
-            Text = "导入插件", Bounds = new Rectangle(140, 326, 120, 25),
+            Text = "导入插件", Bounds = new Rectangle(140, 466, 120, 25),
             TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
-            LinkColor = Color.FromArgb(173, 192, 201), ActiveLinkColor = Accent,
+            LinkColor = Color.FromArgb(226, 235, 242), ActiveLinkColor = Accent,
             LinkBehavior = LinkBehavior.HoverUnderline,
         };
         import.LinkClicked += (_, _) =>

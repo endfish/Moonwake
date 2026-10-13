@@ -63,6 +63,45 @@ internal static class ImportTests
         Expect(() => service.Import(plan, false, ["https://unselected.test/repo.json"]), "unpreviewed repository selection is rejected");
         Expect(() => service.Inspect(paths.HomeDirectory), "shared or overlapping source and target directories are rejected");
 
+        var devDirectory = Path.Combine(source, "development-output");
+        Directory.CreateDirectory(devDirectory);
+        var devDll = Path.Combine(devDirectory, "Developer.dll");
+        File.WriteAllText(devDll, "development fixture; never executed");
+        File.WriteAllText(Path.ChangeExtension(devDll, ".json"), "{\"InternalName\":\"Developer\",\"DalamudApiLevel\":15}");
+        File.WriteAllText(Path.Combine(source, "pluginConfigs", "Developer.json"), "{\"fromDevelopment\":true}");
+        var devSource = new JsonObject
+        {
+            ["DevPluginLoadLocations"] = new JsonObject { ["$values"] = new JsonArray
+            {
+                new JsonObject { ["Path"] = devDll.Replace('\\', '/'), ["IsEnabled"] = true, ["Nickname"] = "Work in progress" },
+                new JsonObject { ["Path"] = devDll, ["IsEnabled"] = true },
+                new JsonObject { ["Path"] = Path.Combine(devDirectory, "Missing.dll"), ["IsEnabled"] = true },
+            } },
+            ["DevPluginSettings"] = new JsonObject { [devDll] = new JsonObject
+            {
+                ["StartOnBoot"] = true, ["AutomaticReloading"] = true, ["NotifyForErrors"] = false, ["WorkingPluginId"] = originalId,
+            } },
+        };
+        var devSourceText = devSource.ToJsonString();
+        File.WriteAllText(Path.Combine(source, "dalamudConfig.json"), devSourceText);
+        var devPlan = service.Inspect(source);
+        Check(devPlan.DevelopmentPlugins.Count == 1 && devPlan.SkippedDevelopmentPlugins == 1, "development preview normalizes duplicate paths and skips missing DLLs");
+        Check(service.Import(devPlan, true, []).DevelopmentPlugins == 0, "development paths require the development import option");
+        result = service.Import(devPlan, true, [], true);
+        var devGlobal = JsonNode.Parse(File.ReadAllText(paths.DalamudConfigurationPath))!;
+        var devSetting = devGlobal["DevPluginSettings"]![devDll]!;
+        Check(result.DevelopmentPlugins == 1 && result.ConfigurationItems == 1 && devGlobal["DevMode"]!.GetValue<bool>() &&
+              !devSetting["StartOnBoot"]!.GetValue<bool>() && devSetting["AutomaticReloading"]!.GetValue<bool>() &&
+              !devSetting["NotifyForErrors"]!.GetValue<bool>() && devSetting["WorkingPluginId"]!.GetValue<string>() != originalId,
+              "development import preserves reload preferences with independent identity and startup disabled");
+        Check(devGlobal["DevPluginLoadLocations"]![0]!["Path"]!.GetValue<string>() == devDll &&
+              File.ReadAllText(Path.Combine(paths.PluginConfigurationsDirectory, "Developer.json")).Contains("fromDevelopment") &&
+              File.ReadAllText(Path.Combine(source, "dalamudConfig.json")) == devSourceText && File.ReadAllText(devDll).Contains("never executed"),
+              "development import references the original build output and copies configuration without changing the source");
+        var savedDevConfiguration = File.ReadAllText(paths.DalamudConfigurationPath);
+        Check(service.Import(devPlan, true, [], true).DevelopmentPlugins == 0 && File.ReadAllText(paths.DalamudConfigurationPath) == savedDevConfiguration,
+              "repeated development import preserves settings and identities");
+
         var blocked = Path.Combine(source, "installedPlugins", "Blocked", "1.0.0");
         Directory.CreateDirectory(blocked);
         File.WriteAllText(Path.Combine(blocked, "Blocked.dll"), "fixture");
