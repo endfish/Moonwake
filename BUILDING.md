@@ -62,6 +62,8 @@ The interface hides after detecting the loaded core module and holds the selecte
 
 Offline checks include the shell lifecycle/gating suite, upstream core tests, FFXIVClientStructs signature resolution and CExporter layout diagnostics. Signature resolution must be run against the intended game executable; matches alone do not prove field layout correctness. `validation/cexporter-baseline.txt` records known inherited layout diagnostics for comparison, not a compatibility exemption. The upstream concurrent file test may intermittently fail on Windows when its unsynchronised delete races other operations; retain failures and investigate rather than hiding them. The language-pack integration test additionally requires its external fixture.
 
+For a client update, run `scripts/check-client.ps1 -GameExecutable <ffxiv_dx11.exe> -SourceRoot <prepared-Dalamud-directory>`. It records the client version, executable hash, source recipe and resolved/total signature counts under `artifacts/`. Missing signatures fail the check even when the upstream resolver process exits successfully. The check does not add a supported game version. Use `scripts/check-layout.ps1` separately to compare inherited layout diagnostics.
+
 Before admitting a client version, verify startup, Chinese fonts and text input, UI interaction, login/logout, scene transitions, core configuration, clean game exit, and selected plugins in an isolated test profile. No game files or local test logs belong in this repository.
 
 ## Distribution status
