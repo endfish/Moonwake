@@ -40,7 +40,13 @@ $env:MOONWAKE_HOME = Join-Path $PWD 'artifacts/test-home'
 
 The maintenance script fetches assets at the international commit pinned in `resources.lock.json` and the Simplified Chinese font directly from Noto. It omits the upstream blacklist and game debug symbols, preserves resource licenses, and copies only the selected runtime components from the local Microsoft installation. It does not copy any launcher settings, plugin repositories or plugins. The desktop app itself has no automatic download or login flow.
 
+Resource preparation also applies the Moonwake logo and the terminology overlay in `resources/zh-cn-overrides.json`. To update an existing development asset directory after editing that overlay, run `scripts/apply-brand-assets.ps1 -AssetDirectory <asset-directory>`. The new core defaults to Moonwake Blue; existing user themes are preserved.
+
 The default data location is `%APPDATA%/Moonwake`. `MOONWAKE_HOME` overrides it for experiments. Test resources and payloads stay out of Git. Resource preparation refuses existing destination directories; use a new test home for another bundle.
+
+The desktop import dialog copies API 15 plugin files and optional per-plugin configuration from an existing profile. It never shares live directories or imports the source core/global settings. Existing target plugins and configuration are preserved, copied plugins receive new disabled identities, and repository URLs require individual selection. API matching is only an initial filter, not proof of game compatibility. File staging and rollback protect against partial copies; staging files and configuration backups remain under `imports/`.
+
+Opening the plugin manager uses its current in-memory repository snapshot. Startup, configured automatic updates, repository changes and the explicit refresh button can refresh metadata. Background refresh retains the previous list until a successful replacement and does not show the initial loading overlay again. A failed refresh retains the last successful list and exposes the repository error.
 
 ## Compatibility and testing
 

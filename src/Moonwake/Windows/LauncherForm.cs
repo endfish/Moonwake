@@ -16,6 +16,7 @@ internal sealed class LauncherForm : Form
     private readonly GameProcessService processService;
     private readonly InjectionService injectionService;
     private readonly StandaloneLogger logger;
+    private readonly StandalonePaths paths;
     private readonly PayloadValidator validator;
     private readonly bool preview;
     private readonly ComboBox processes = new ProcessComboBox();
@@ -35,6 +36,7 @@ internal sealed class LauncherForm : Form
         this.processService = processService;
         this.injectionService = injectionService;
         this.logger = logger;
+        this.paths = paths;
         this.validator = new PayloadValidator(paths);
         this.preview = preview;
         this.Text = "Moonwake";
@@ -79,8 +81,7 @@ internal sealed class LauncherForm : Form
 
     private void BuildLayout()
     {
-        var title = new Label { Text = "Moonwake", Bounds = new Rectangle(28, 24, 255, 42),
-            BackColor = Color.Transparent, ForeColor = Foreground, Font = new Font("Segoe UI", 21F, FontStyle.Bold) };
+        var title = new BrandHeader { Bounds = new Rectangle(24, 18, 320, 94), BackColor = Color.Transparent };
         title.MouseDown += this.DragWindow;
         this.Controls.Add(title);
         var close = new Button { Text = "×", Bounds = new Rectangle(355, 17, 30, 30),
@@ -126,6 +127,20 @@ internal sealed class LauncherForm : Form
         this.status.AutoEllipsis = true;
         this.Controls.Add(this.status);
         this.tooltips.SetToolTip(this.inject, "成功后隐藏窗口；游戏关闭时自动退出，无托盘图标。");
+        var import = new LinkLabel
+        {
+            Text = "导入插件", Bounds = new Rectangle(140, 326, 120, 25),
+            TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
+            LinkColor = Color.FromArgb(173, 192, 201), ActiveLinkColor = Accent,
+            LinkBehavior = LinkBehavior.HoverUnderline,
+        };
+        import.LinkClicked += (_, _) =>
+        {
+            if (this.preview || this.busy || this.attached) return;
+            using var dialog = new ImportForm(this.paths);
+            dialog.ShowDialog(this);
+        };
+        this.Controls.Add(import);
     }
 
     private void SetStatus(string text)
@@ -142,7 +157,7 @@ internal sealed class LauncherForm : Form
             this.processes.Items.Clear();
             this.processes.Items.Add("FINAL FANTASY XIV  ·  进程 12840");
             this.processes.SelectedIndex = 0;
-            this.SetStatus("连接成功后，随游戏一同退出。");
+            this.SetStatus("注入后隐藏窗口，游戏退出时自动关闭。");
             this.inject.Enabled = true;
             return;
         }
@@ -189,7 +204,7 @@ internal sealed class LauncherForm : Form
             this.SetStatus("本地核心与运行资源尚未准备完成。");
         else
         {
-            this.SetStatus(this.lastFailure ?? "连接成功后，随游戏一同退出。");
+            this.SetStatus(this.lastFailure ?? "注入后隐藏窗口，游戏退出时自动关闭。");
             this.inject.Enabled = true;
         }
     }
@@ -288,12 +303,61 @@ internal sealed class LauncherForm : Form
         protected override void OnPaint(PaintEventArgs e)
         {
             var hovered = this.ClientRectangle.Contains(this.PointToClient(Cursor.Position));
-            var color = !this.Enabled ? Color.FromArgb(43, 64, 72) : hovered ? Color.FromArgb(190, 237, 238) : Accent;
-            e.Graphics.Clear(color);
+            var color = !this.Enabled ? Color.FromArgb(31, 45, 55) : hovered ? Color.FromArgb(61, 128, 157) : Color.FromArgb(40, 90, 118);
+            using var gradient = new LinearGradientBrush(this.ClientRectangle, color, Color.FromArgb(color.R / 2, color.G / 2, color.B / 2), LinearGradientMode.Vertical);
+            e.Graphics.FillRectangle(gradient, this.ClientRectangle);
+            using var edge = new Pen(this.Enabled ? Color.FromArgb(134, 166, 179) : Color.FromArgb(70, 88, 100));
+            e.Graphics.DrawRectangle(edge, 0, 0, this.Width - 1, this.Height - 1);
+            using var inner = new Pen(Color.FromArgb(48, 219, 205, 164));
+            e.Graphics.DrawLine(inner, 8, 2, this.Width - 9, 2);
             TextRenderer.DrawText(e.Graphics, this.Text, this.Font, this.ClientRectangle,
-                this.Enabled ? Color.FromArgb(18, 39, 45) : Color.FromArgb(137, 156, 165),
+                this.Enabled ? Foreground : Color.FromArgb(137, 156, 165),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             if (this.Focused && this.ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(this.ClientRectangle, -4, -4));
+        }
+    }
+
+    private sealed class BrandHeader : Control
+    {
+        private readonly Image mark;
+
+        public BrandHeader()
+        {
+            this.SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            using var stream = typeof(LauncherForm).Assembly.GetManifestResourceStream("Moonwake.Resources.app-icon.png")!;
+            using var source = Image.FromStream(stream);
+            this.mark = new Bitmap(source);
+            this.AccessibleName = "Moonwake";
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            var g = e.Graphics;
+            g.ScaleTransform(this.Width / 320F, this.Height / 94F);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.DrawImage(this.mark, new Rectangle(0, 0, 86, 86));
+            using var font = new Font("Georgia", 18F, FontStyle.Regular, GraphicsUnit.Point);
+            using var ink = new SolidBrush(Color.FromArgb(229, 234, 232));
+            using var format = new StringFormat(StringFormat.GenericTypographic);
+            var x = 92F;
+            foreach (var character in "MOONWAKE")
+            {
+                var text = character.ToString();
+                g.DrawString(text, font, ink, x, 27, format);
+                x += g.MeasureString(text, font, PointF.Empty, format).Width + 1.8F;
+            }
+            using var rule = new Pen(Color.FromArgb(145, 126, 91), 0.8F);
+            g.DrawLine(rule, 94, 65, 301, 65);
+            using var gold = new SolidBrush(Color.FromArgb(185, 164, 121));
+            g.FillPolygon(gold, new PointF[] { new(193, 62), new(196, 65), new(193, 68), new(190, 65) });
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) this.mark.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

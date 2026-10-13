@@ -1,0 +1,632 @@
+diff --git a/Dalamud.Test/Plugin/RepositorySnapshotTests.cs b/Dalamud.Test/Plugin/RepositorySnapshotTests.cs
+new file mode 100644
+index 000000000..9acf01f54
+--- /dev/null
++++ b/Dalamud.Test/Plugin/RepositorySnapshotTests.cs
+@@ -0,0 +1,60 @@
++using System;
++using System.Net;
++using System.Net.Http;
++using System.Threading;
++using System.Threading.Tasks;
++
++using Dalamud.Plugin.Internal.Types;
++
++using Xunit;
++
++namespace Dalamud.Test.Plugin;
++
++public class RepositorySnapshotTests
++{
++    [Fact]
++    public async Task Refresh_RetainsVisibleSnapshotUntilSuccessfulReplacement()
++    {
++        using var handler = new ControlledHandler();
++        using var client = new HttpClient(handler);
++        var repository = new PluginRepository(client, "https://example.test/repo.json", true);
++        await repository.ReloadAsync();
++        var original = repository.PluginMaster;
++        Assert.NotNull(original);
++        Assert.Equal("First", Assert.Single(original).Name);
++
++        var refresh = repository.ReloadAsync();
++        Assert.False(refresh.IsCompleted);
++        Assert.Equal(PluginRepositoryState.InProgress, repository.State);
++        Assert.Same(original, repository.PluginMaster);
++        handler.Pending.SetResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
++        await refresh;
++        Assert.Equal(PluginRepositoryState.Fail, repository.State);
++        Assert.Same(original, repository.PluginMaster);
++
++        await repository.ReloadAsync();
++        Assert.Equal(PluginRepositoryState.Success, repository.State);
++        Assert.Equal("Updated", Assert.Single(repository.PluginMaster!).Name);
++        Assert.Equal(3, handler.Requests);
++    }
++
++    private sealed class ControlledHandler : HttpMessageHandler
++    {
++        public TaskCompletionSource<HttpResponseMessage> Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
++
++        public int Requests { get; private set; }
++
++        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
++        {
++            this.Requests++;
++            if (this.Requests == 2)
++                return this.Pending.Task;
++
++            var name = this.Requests == 1 ? "First" : "Updated";
++            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
++            {
++                Content = new StringContent("[{\"InternalName\":\"Example\",\"Name\":\"" + name + "\",\"AssemblyVersion\":\"1.0.0\",\"DalamudApiLevel\":15}]"),
++            });
++        }
++    }
++}
+diff --git a/Dalamud/Configuration/Internal/DalamudConfiguration.cs b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+index 087da93a2..9f128671e 100644
+--- a/Dalamud/Configuration/Internal/DalamudConfiguration.cs
++++ b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+@@ -201,7 +201,7 @@ internal sealed class DalamudConfiguration : IInternalDisposableService
+     /// <summary>
+     /// Gets or sets a value indicating whether a message containing detailed plugin information should be sent at login.
+     /// </summary>
+-    public bool PrintPluginsWelcomeMsg { get; set; } = true;
++    public bool PrintPluginsWelcomeMsg { get; set; } = false;
+ 
+     /// <summary>
+     /// Gets or sets a value indicating whether plugins should be auto-updated.
+@@ -324,7 +324,7 @@ internal sealed class DalamudConfiguration : IInternalDisposableService
+     /// <summary>
+     /// Gets or sets the name of the currently chosen style.
+     /// </summary>
+-    public string ChosenStyle { get; set; } = "Dalamud Standard";
++    public string ChosenStyle { get; set; } = "Moonwake Blue";
+ 
+     /// <summary>
+     /// Gets or sets per-character style assignments.
+diff --git a/Dalamud/Game/ChatHandlers.cs b/Dalamud/Game/ChatHandlers.cs
+index 91ac40bf7..7499d03f0 100644
+--- a/Dalamud/Game/ChatHandlers.cs
++++ b/Dalamud/Game/ChatHandlers.cs
+@@ -101,7 +101,7 @@ internal partial class ChatHandlers : IServiceType
+ 
+         if (this.configuration.PrintDalamudWelcomeMsg)
+         {
+-            chatGui.Print(string.Format(Loc.Localize("DalamudWelcome", "Dalamud {0} loaded."), Versioning.GetScmVersion())
++            chatGui.Print(string.Format(Loc.Localize("DalamudWelcome", "Moonwake is ready. Core version: {0}."), Versioning.GetScmVersion())
+                           + string.Format(Loc.Localize("PluginsWelcome", " {0} plugin(s) loaded."), pluginManager.InstalledPlugins.Count(x => x.IsLoaded)));
+         }
+ 
+diff --git a/Dalamud/Interface/Internal/InterfaceManager.cs b/Dalamud/Interface/Internal/InterfaceManager.cs
+index 0da238484..2c3fa3b0a 100644
+--- a/Dalamud/Interface/Internal/InterfaceManager.cs
++++ b/Dalamud/Interface/Internal/InterfaceManager.cs
+@@ -732,10 +732,9 @@ internal partial class InterfaceManager : IInternalDisposableService
+ 
+             StyleModel.TransferOldModels();
+ 
+-            StyleModelV1[] builtInStyles = [StyleModelV1.DalamudStandard, StyleModelV1.DalamudClassic, StyleModelV1.DalamudHazy];
++            StyleModelV1[] builtInStyles = [StyleModelV1.MoonwakeBlue, StyleModelV1.DalamudStandard, StyleModelV1.DalamudClassic, StyleModelV1.DalamudHazy];
+ 
+-            if (configuration.SavedStyles == null ||
+-                configuration.SavedStyles.All(x => x.Name != builtInStyles[0].Name))
++            if (configuration.SavedStyles == null || configuration.SavedStyles.Count == 0)
+             {
+                 configuration.SavedStyles = [.. builtInStyles];
+                 configuration.ChosenStyle = builtInStyles[0].Name;
+@@ -754,7 +753,7 @@ internal partial class InterfaceManager : IInternalDisposableService
+             var style = configuration.SavedStyles.FirstOrDefault(x => x.Name == configuration.ChosenStyle);
+             if (style == null)
+             {
+-                style = StyleModelV1.DalamudStandard;
++                style = StyleModelV1.MoonwakeBlue;
+                 configuration.ChosenStyle = style.Name;
+                 configuration.QueueSave();
+             }
+diff --git a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+index 9e583193e..5b5815111 100644
+--- a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+@@ -37,10 +37,10 @@ internal sealed class ChangelogWindow : Window, IDisposable
+     private const string WarrantsChangelogForMajorMinor = "15.0.";
+ 
+     private const string ChangeLog =
+-        @"• 更新了 Dalamud 以兼容版本 7.4
+-• 大多数插件现在已与国际服保持同步更新
+-• 欢迎向插件原作者提交反馈或翻译贡献
+-• 国服将继续单独维护一些需要特殊修复的插件
++        @"• 插件与配置保存在 Moonwake 的独立数据目录
++• 桌面工具提供插件迁移入口，导入的插件默认禁用
++• 插件管理器复用已有仓库列表，刷新在后台进行
++• 游戏更新后，请先禁用插件验证核心，再逐项测试插件
+ ";
+ 
+     private static readonly TimeSpan TitleScreenWaitTime = TimeSpan.FromSeconds(0.5f);
+@@ -54,7 +54,6 @@ internal sealed class ChangelogWindow : Window, IDisposable
+     private readonly Lazy<IFontHandle> bannerFont;
+     private readonly Lazy<IDalamudTextureWrap> apiBumpExplainerTexture;
+     private readonly Lazy<IDalamudTextureWrap> logoTexture;
+-    private readonly Lazy<IDalamudTextureWrap> fontTipsTexture;
+ 
+     private readonly InOutCubic windowFade = new(TimeSpan.FromSeconds(2.5f))
+     {
+@@ -108,7 +107,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+         DalamudAssetManager assets,
+         GameGui gameGui,
+         Framework framework)
+-        : base("What's new in Dalamud?##ChangelogWindow", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse, true)
++        : base("Moonwake 更新说明##ChangelogWindow", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse, true)
+     {
+         this.gameGui = gameGui;
+ 
+@@ -123,8 +122,6 @@ internal sealed class ChangelogWindow : Window, IDisposable
+         this.apiBumpExplainerTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.ChangelogApiBumpIcon));
+         this.logoTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.Logo));
+ 
+-        this.fontTipsTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.MissingFontTips));
+-
+         // If we are going to show a changelog, make sure we have the font ready, otherwise it will hitch
+         if (WarrantsChangelog())
+             _ = this.bannerFont.Value;
+@@ -345,7 +342,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                 {
+                     // Draw big, centered next button at the bottom of the window
+                     var buttonHeight = 30 * ImGuiHelpers.GlobalScale;
+-                    var buttonText = "Next";
++                    var buttonText = "下一步";
+                     var buttonWidth = ImGui.CalcTextSize(buttonText).X + 40 * ImGuiHelpers.GlobalScale;
+                     ImGui.SetCursorPosY(windowSize.Y - buttonHeight - (20 * ImGuiHelpers.GlobalScale));
+                     ImGuiHelpers.CenterCursorFor((int)buttonWidth);
+@@ -363,16 +360,14 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                 {
+                     case State.WindowFadeIn:
+                     case State.ExplainerIntro:
+-                        ImGui.TextWrapped($"Welcome to Dalamud v{Versioning.GetScmVersion()}!");
++                        ImGui.TextWrapped($"欢迎使用 Moonwake。核心版本：{Versioning.GetScmVersion()}");
+                         ImGuiHelpers.ScaledDummy(5);
+                         ImGui.TextWrapped(ChangeLog);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("这个更新日志是对本版本中最重要的更改的快速概述"u8);
+-                        ImGui.TextWrapped("请点击 Next 以查看更新插件的快速指南。"u8);
++                        ImGui.TextWrapped("以上为当前版本的主要变化。"u8);
++                        ImGui.TextWrapped("选择“下一步”查看插件兼容性与更新说明。"u8);
+ 
+-                        ImGui.Image(
+-                            this.fontTipsTexture.Value.Handle,
+-                            this.fontTipsTexture.Value.Size);
++                        ImGui.TextWrapped("如中文显示异常，可在设置中恢复默认字体。"u8);
+ 
+                         var interfaceManager = Service<InterfaceManager>.Get();
+                         using (interfaceManager.MonoFontHandle?.Push())
+@@ -394,13 +389,13 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         break;
+ 
+                     case State.ExplainerApiBump:
+-                        ImGui.TextWrapped("注意了！由于此补丁的更改，所有插件都需要更新，并已自动禁用"u8);
+-                        ImGui.TextWrapped("这是正常情况，也是进行重大游戏更新所必需的。"u8);
++                        ImGui.TextWrapped("当前核心 API 已更新。不兼容的插件将保持禁用，直至安装适配版本。"u8);
++                        ImGui.TextWrapped("游戏更新后，请先确认核心和插件与当前客户端版本兼容。"u8);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("要更新插件，请打开插件安装程序，然后点击“更新插件”。更新后的插件应会自动更新并重新启用。"u8);
++                        ImGui.TextWrapped("请打开插件管理器检查更新。完成更新后，再逐项启用并验证所需插件。"u8);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("请记住，并非您所有的插件都可能已经针对新版本进行了更新。"u8);
+-                        ImGui.TextWrapped("如果在“已安装插件”选项卡中显示某些插件带有红色叉号，那么它们可能还不可用。"u8);
++                        ImGui.TextWrapped("部分插件可能尚未提供当前版本的适配。"u8);
++                        ImGui.TextWrapped("“已安装插件”中的状态图标会说明兼容性或加载问题。"u8);
+ 
+                         ImGuiHelpers.ScaledDummy(15);
+ 
+@@ -442,7 +437,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                                    !this.isFadingOutForStateChange;
+                         }
+ 
+-                        using (ImRaii.PushColor(ImGuiCol.Button, ImGuiColors.DPSRed))
++                        using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.18f, 0.39f, 0.49f, 1f)))
+                         {
+                             if (DrawCenteredButton("启用自动更新", 30))
+                             {
+@@ -467,8 +462,8 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         break;
+ 
+                     case State.Links:
+-                        ImGui.TextWrapped("这是Moonwake 开发预览构建，不使用官方插件库，也不提供面向第三方用户的技术支持。"u8);
+-                        ImGui.TextWrapped("使用补丁日研究功能前，请先阅读源码、风险说明并备份独立数据目录。"u8);
++                        ImGui.TextWrapped("Moonwake 已准备就绪。您可以在插件管理器中配置仓库、安装插件并查看运行状态。"u8);
++                        ImGui.TextWrapped("插件与配置保存在 Moonwake 数据目录。游戏更新后，请先使用禁用插件的模式验证核心。"u8);
+ 
+                         ImGuiHelpers.ScaledDummy(45);
+ 
+@@ -488,7 +483,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+                         ImGuiHelpers.ScaledDummy(5);
+ 
+-                        if (CenteredIconButton(FontAwesomeIcon.Globe, "独立注入壳与风险说明"))
++                        if (CenteredIconButton(FontAwesomeIcon.Globe, "使用说明"))
+                         {
+                             Util.OpenLink("https://github.com/endfish/Moonwake#readme");
+                         }
+@@ -536,7 +531,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+             if (ImGui.IsItemHovered())
+             {
+-                ImGui.SetTooltip("我不关心这个"u8);
++                ImGui.SetTooltip("关闭此说明"u8);
+             }
+         }
+     }
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+index 05226b29c..9a3ea5d39 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+@@ -292,7 +292,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+     {
+         var pluginManager = Service<PluginManager>.Get();
+ 
+-        _ = pluginManager.ReloadAllReposAsync();
++        // Opening the window reuses the current snapshot; refresh is explicit or scheduled.
+         _ = pluginManager.ScanDevPluginsAsync();
+ 
+         this.adaptiveSort = true;
+@@ -612,54 +612,54 @@ internal class PluginInstallerWindow : Window, IDisposable
+             switch (this.loadingIndicatorKind)
+             {
+                 case LoadingIndicatorKind.Unknown:
+-                    ImGuiHelpers.CenteredText("Doing something, not sure what!");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeOperationPending", "Processing request..."));
+                     break;
+                 case LoadingIndicatorKind.EnablingSingle:
+-                    ImGuiHelpers.CenteredText("Enabling plugin...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginEnabling", "Enabling plugin..."));
+                     break;
+                 case LoadingIndicatorKind.DisablingSingle:
+-                    ImGuiHelpers.CenteredText("Disabling plugin...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginDisabling", "Disabling plugin..."));
+                     break;
+                 case LoadingIndicatorKind.UpdatingSingle:
+-                    ImGuiHelpers.CenteredText("Updating plugin...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginUpdating", "Updating plugin..."));
+                     break;
+                 case LoadingIndicatorKind.UpdatingAll:
+-                    ImGuiHelpers.CenteredText("Updating plugins...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginsUpdating", "Updating plugins..."));
+                     break;
+                 case LoadingIndicatorKind.Installing:
+-                    ImGuiHelpers.CenteredText("Installing plugin...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginInstalling", "Installing plugin..."));
+                     break;
+                 case LoadingIndicatorKind.Manager:
+                     if (pluginManager.PluginsReady && !pluginManager.ReposReady)
+                     {
+-                        ImGuiHelpers.CenteredText("Loading repositories...");
++                        ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeRepositoriesLoading", "Loading repository metadata..."));
+                         ImGuiHelpers.ScaledDummy(10);
+ 
+                         DrawProgressBar(pluginManager.Repos, x => x.State != PluginRepositoryState.Success &&
+                                                                   x.State != PluginRepositoryState.Fail &&
+                                                                   x.IsEnabled,
+                                         x => x.IsEnabled,
+-                                        x => ImGuiHelpers.CenteredText($"Loading {x.PluginMasterUrl}"));
++                                        x => ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeRepositoryLoadingItem", "Loading repository metadata")));
+                     }
+                     else if (!pluginManager.PluginsReady && pluginManager.ReposReady)
+                     {
+-                        ImGuiHelpers.CenteredText("Loading installed plugins...");
++                        ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeInstalledPluginsLoading", "Loading installed plugins..."));
+                         ImGuiHelpers.ScaledDummy(10);
+ 
+                         DrawProgressBar(pluginManager.InstalledPlugins, x => x.State == PluginState.Loading,
+                                         x => x.State is PluginState.Loaded or
+                                                  PluginState.LoadError or
+                                                  PluginState.Loading,
+-                                        x => ImGuiHelpers.CenteredText($"Loading {x.Name}"));
++                                        x => ImGuiHelpers.CenteredText(string.Format(Loc.Localize("MoonwakePluginLoadingItem", "Loading: {0}"), x.Name)));
+                     }
+                     else
+                     {
+-                        ImGuiHelpers.CenteredText("Loading repositories and plugins...");
++                        ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeManagerLoading", "Initializing plugin manager..."));
+                     }
+ 
+                     break;
+                 case LoadingIndicatorKind.ProfilesLoading:
+-                    ImGuiHelpers.CenteredText("Collections are being applied...");
++                    ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeCollectionsApplying", "Applying plugin collections..."));
+                     break;
+                 default:
+                     throw new ArgumentOutOfRangeException();
+@@ -669,8 +669,8 @@ internal class PluginInstallerWindow : Window, IDisposable
+             {
+                 ImGuiHelpers.ScaledDummy(10);
+                 ImGui.PushStyleColor(ImGuiCol.Text, ImGuiColors.AttentionForeground);
+-                ImGuiHelpers.CenteredText("One of your plugins may be blocking the installer.");
+-                ImGuiHelpers.CenteredText("You can try restarting in safe mode, and deleting the plugin.");
++                ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginLoadDelayed", "A plugin is taking longer than expected to load."));
++                ImGuiHelpers.CenteredText(Loc.Localize("MoonwakePluginLoadRecovery", "Restart with plugins disabled, then review the log and enable plugins individually."));
+                 ImGui.PopStyleColor();
+ 
+                 ImGuiHelpers.BeginHorizontalButtonGroup()
+@@ -930,6 +930,15 @@ internal class PluginInstallerWindow : Window, IDisposable
+             }
+         }
+ 
++        ImGui.SameLine();
++        using (ImRaii.Disabled(pluginManager.IsRefreshingRepos))
++        {
++            if (ImGui.Button(pluginManager.IsRefreshingRepos
++                                 ? Loc.Localize("MoonwakeRepositoryRefreshing", "Refreshing...")
++                                 : Loc.Localize("MoonwakeRefreshRepositories", "Refresh repositories")))
++                _ = pluginManager.ReloadAllReposAsync();
++        }
++
+         var closeText = Locs.FooterButton_Close;
+         var closeButtonSize = ImGuiHelpers.GetButtonSize(closeText);
+ 
+@@ -4805,9 +4814,9 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+         public static string FeedbackModal_ContactInformationRequired => Loc.Localize("InstallerFeedbackContactInfoRequired", "Contact information has not been provided. We require contact information to respond to questions, or to request additional information to troubleshoot problems.");
+ 
+-        public static string FeedbackModal_ContactInformationDiscordButton => Loc.Localize("ContactInformationDiscordButton", "Open Standalone source notes");
++        public static string FeedbackModal_ContactInformationDiscordButton => Loc.Localize("ContactInformationDiscordButton", "Open Moonwake documentation");
+ 
+-        public static string FeedbackModal_ContactInformationDiscordUrl => Loc.Localize("ContactInformationDiscordUrl", "https://github.com/endfish/DalamudStandaloneCN#readme");
++        public static string FeedbackModal_ContactInformationDiscordUrl => Loc.Localize("ContactInformationDiscordUrl", "https://github.com/endfish/Moonwake#readme");
+ 
+         public static string FeedbackModal_IncludeLastError => Loc.Localize("InstallerFeedbackIncludeLastError", "Include last error message");
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+index 3c2c3d525..83794ded7 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+@@ -215,7 +215,7 @@ Please see licenses.txt for more information.
+ 
+ Thanks to the Dalamud, XIVLauncher, XIVLauncherCN and related upstream communities.
+ 
+-Moonwake is an independent CN development build maintained by Endfish.
++Moonwake is a development preview. The desktop host is developed by Astra using AI.
+ Project: https://github.com/endfish/Moonwake
+ 
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+index d4386cbb0..728bb5217 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+@@ -43,6 +43,8 @@ internal sealed class SettingsTabExperimental : SettingsTab
+                 c => c.DoPluginTest,
+                 (v, c) =>
+                 {
++                    if (c.DoPluginTest == v)
++                        return;
+                     c.DoPluginTest = v;
+                     _ = Service<PluginManager>.Get().ReloadAllReposAsync();
+                 }),
+diff --git a/Dalamud/Interface/Style/StyleModelV1.cs b/Dalamud/Interface/Style/StyleModelV1.cs
+index 91e00f730..411310ea3 100644
+--- a/Dalamud/Interface/Style/StyleModelV1.cs
++++ b/Dalamud/Interface/Style/StyleModelV1.cs
+@@ -23,6 +23,34 @@ public class StyleModelV1 : StyleModel
+         this.Name = "Unknown";
+     }
+ 
++    /// <summary>
++    /// Gets the Moonwake blue interface theme, preserving semantic warning and error colors.
++    /// </summary>
++    public static StyleModelV1 MoonwakeBlue
++    {
++        get
++        {
++            var style = DalamudStandard;
++            style.Name = "Moonwake Blue";
++            style.Colors["WindowBg"] = new Vector4(0.035f, 0.055f, 0.075f, 0.96f);
++            style.Colors["PopupBg"] = new Vector4(0.055f, 0.08f, 0.105f, 0.98f);
++            style.Colors["Border"] = new Vector4(0.31f, 0.43f, 0.50f, 0.65f);
++            style.Colors["TitleBgActive"] = new Vector4(0.10f, 0.24f, 0.31f, 0.95f);
++            style.Colors["FrameBg"] = new Vector4(0.10f, 0.16f, 0.21f, 0.85f);
++            style.Colors["FrameBgHovered"] = new Vector4(0.18f, 0.35f, 0.43f, 0.9f);
++            style.Colors["FrameBgActive"] = new Vector4(0.22f, 0.43f, 0.53f, 1f);
++            style.Colors["Button"] = new Vector4(0.15f, 0.33f, 0.42f, 0.9f);
++            style.Colors["ButtonHovered"] = new Vector4(0.23f, 0.47f, 0.59f, 1f);
++            style.Colors["ButtonActive"] = new Vector4(0.29f, 0.58f, 0.70f, 1f);
++            style.Colors["Header"] = new Vector4(0.13f, 0.28f, 0.36f, 0.75f);
++            style.Colors["HeaderHovered"] = new Vector4(0.21f, 0.40f, 0.49f, 0.95f);
++            style.Colors["HeaderActive"] = new Vector4(0.25f, 0.48f, 0.58f, 1f);
++            foreach (var color in new[] { "CheckMark", "SliderGrabActive", "SeparatorHovered", "SeparatorActive", "ResizeGripActive", "TabHovered", "TabActive", "PlotHistogram", "PlotHistogramHovered" })
++                style.Colors[color] = new Vector4(0.40f, 0.72f, 0.82f, 0.9f);
++            return style;
++        }
++    }
++
+     /// <summary>
+     /// Gets the standard Dalamud look.
+     /// </summary>
+diff --git a/Dalamud/Plugin/Internal/PluginManager.cs b/Dalamud/Plugin/Internal/PluginManager.cs
+index b82656f1e..e535b6e33 100644
+--- a/Dalamud/Plugin/Internal/PluginManager.cs
++++ b/Dalamud/Plugin/Internal/PluginManager.cs
+@@ -78,6 +78,7 @@ internal class PluginManager : IInternalDisposableService
+     private readonly HappyHttpClient happyHttpClient = Service<HappyHttpClient>.Get();
+ 
+     private Task? repoRefreshTask;
++    private bool hasRepositorySnapshot;
+ 
+     static PluginManager()
+     {
+@@ -210,7 +211,10 @@ internal class PluginManager : IInternalDisposableService
+     /// <summary>
+     /// Gets a value indicating whether all added repos are not in progress.
+     /// </summary>
+-    public bool ReposReady => this.repoRefreshTask is { IsCompleted: true };
++    public bool ReposReady => this.hasRepositorySnapshot;
++
++    /// <summary>Gets a value indicating whether repository metadata is being refreshed in the background.</summary>
++    public bool IsRefreshingRepos => this.repoRefreshTask is { IsCompleted: false };
+ 
+     /// <summary>
+     /// Gets or sets a value indicating whether the plugin manager started in safe mode.
+@@ -405,6 +409,7 @@ internal class PluginManager : IInternalDisposableService
+                         .ToList();
+ 
+         this.Repos = repos;
++        this.hasRepositorySnapshot = false;
+         await this.ReloadAllReposAsync(notify);
+     }
+ 
+@@ -426,7 +431,7 @@ internal class PluginManager : IInternalDisposableService
+     /// </summary>
+     /// <returns>Task that will resolve once all repos are reloaded, or a completed task if no reload operation is in progress.</returns>
+     public Task WaitForReposAsync() =>
+-        this.repoRefreshTask ?? throw new Exception("Repo refresh task was never set.");
++        this.repoRefreshTask ?? Task.CompletedTask;
+ 
+     /// <summary>
+     /// Load all plugins, sorted by priority. Any plugins with no explicit definition file or a negative priority
+@@ -1787,6 +1792,7 @@ internal class PluginManager : IInternalDisposableService
+ 
+             Log.Information("Repos reloaded, now refiltering...");
+ 
++            this.hasRepositorySnapshot = true;
+             this.RefilterAvailablePlugins(notify);
+         }
+         catch (Exception ex)
+diff --git a/Dalamud/Plugin/Internal/Types/PluginRepository.cs b/Dalamud/Plugin/Internal/Types/PluginRepository.cs
+index 155cb2e83..d6cf15465 100644
+--- a/Dalamud/Plugin/Internal/Types/PluginRepository.cs
++++ b/Dalamud/Plugin/Internal/Types/PluginRepository.cs
+@@ -27,13 +27,13 @@ internal class PluginRepository
+     private const int HttpRequestTimeoutSeconds = 20;
+ 
+     private static readonly ModuleLog Log = ModuleLog.Create<PluginRepository>();
+-    private static readonly InMemoryCacheHandler CacheHandler = new(
++    private static readonly Lazy<InMemoryCacheHandler> CacheHandler = new(() => new(
+         new SocketsHttpHandler
+         {
+             AutomaticDecompression = DecompressionMethods.All,
+             ConnectCallback = Service<HappyHttpClient>.Get().SharedHappyEyeballsCallback.ConnectCallback,
+         },
+-        CacheExpirationProvider.CreateSimple(TimeSpan.FromHours(3), TimeSpan.FromSeconds(0), TimeSpan.FromSeconds(0)));
++        CacheExpirationProvider.CreateSimple(TimeSpan.FromHours(3), TimeSpan.FromSeconds(0), TimeSpan.FromSeconds(0))));
+ 
+     private readonly HttpClient httpClient;
+ 
+@@ -45,7 +45,7 @@ internal class PluginRepository
+     /// <param name="isEnabled">Whether the plugin repo is enabled.</param>
+     public PluginRepository(HappyHttpClient happyHttpClient, string pluginMasterUrl, bool isEnabled)
+     {
+-        this.httpClient = new(CacheHandler)
++        this.httpClient = new(CacheHandler.Value)
+         {
+             Timeout = TimeSpan.FromSeconds(5),
+             DefaultRequestHeaders =
+@@ -69,6 +69,18 @@ internal class PluginRepository
+         this.IsEnabled = isEnabled;
+     }
+ 
++    /// <summary>Initializes a new instance of the <see cref="PluginRepository"/> class with an explicitly supplied HTTP transport.</summary>
++    /// <param name="httpClient">The HTTP transport.</param>
++    /// <param name="pluginMasterUrl">The repository URL.</param>
++    /// <param name="isEnabled">Whether the repository is enabled.</param>
++    internal PluginRepository(HttpClient httpClient, string pluginMasterUrl, bool isEnabled)
++    {
++        this.httpClient = httpClient;
++        this.PluginMasterUrl = pluginMasterUrl;
++        this.IsThirdParty = true;
++        this.IsEnabled = isEnabled;
++    }
++
+     /// <summary>
+     /// Gets the pluginmaster.json URL.
+     /// </summary>
+@@ -102,7 +114,7 @@ internal class PluginRepository
+     public async Task ReloadAsync(bool skipCache = false)
+     {
+         this.State = PluginRepositoryState.InProgress;
+-        this.PluginMaster = new List<RemotePluginManifest>().AsReadOnly();
++        // Keep the last successful snapshot visible while refreshing or when a request fails.
+ 
+         try
+         {
+@@ -110,7 +122,7 @@ internal class PluginRepository
+ 
+             if (skipCache)
+             {
+-                CacheHandler.InvalidateCache(new Uri(this.PluginMasterUrl));
++                CacheHandler.Value.InvalidateCache(new Uri(this.PluginMasterUrl));
+                 Log.Information($"Cache Clear: {this.PluginMasterUrl}");
+             }
+ 
+@@ -134,8 +146,11 @@ internal class PluginRepository
+             Log.Information($"Successfully fetched repo: {this.PluginMasterUrl}");
+             this.State = PluginRepositoryState.Success;
+ 
+-            var stats = CacheHandler.StatsProvider.GetStatistics().Total;
+-            Log.Information($"Cache: TotalRequests:{stats.TotalRequests}/CacheHit:{stats.CacheHit}/CacheMiss:{stats.CacheMiss}");
++            if (CacheHandler.IsValueCreated)
++            {
++                var stats = CacheHandler.Value.StatsProvider.GetStatistics().Total;
++                Log.Information($"Cache: TotalRequests:{stats.TotalRequests}/CacheHit:{stats.CacheHit}/CacheMiss:{stats.CacheMiss}");
++            }
+         }
+         catch (Exception ex)
+         {
+@@ -177,7 +192,7 @@ internal class PluginRepository
+ 
+     private async Task<HttpResponseMessage> GetPluginMaster(string url, int timeout = HttpRequestTimeoutSeconds)
+     {
+-        var request = new HttpRequestMessage(HttpMethod.Get, url);
++        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+         request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+ 
+diff --git a/Dalamud/Service/LoadingDialog.cs b/Dalamud/Service/LoadingDialog.cs
+index 15e61e260..812ea2d37 100644
+--- a/Dalamud/Service/LoadingDialog.cs
++++ b/Dalamud/Service/LoadingDialog.cs
+@@ -92,7 +92,7 @@ internal sealed class LoadingDialog
+ 
+         this.thread = new Thread(this.ThreadStart)
+         {
+-            Name = "Dalamud Loading Dialog",
++            Name = "Moonwake Loading Dialog",
+         };
+         this.thread.SetApartmentState(ApartmentState.STA);
+         this.thread.Start();
+@@ -128,7 +128,7 @@ internal sealed class LoadingDialog
+         {
+             State.LoadingDalamud => Loc.Localize(
+                 "LoadingDialogMainInstructionLoadingDalamud",
+-                "Dalamud is loading..."),
++                "Moonwake is initializing..."),
+             State.LoadingPlugins => Loc.Localize(
+                 "LoadingDialogMainInstructionLoadingPlugins",
+                 "Waiting for plugins to load..."),
+@@ -152,8 +152,8 @@ internal sealed class LoadingDialog
+         var contentBuilder = new StringBuilder(
+             Loc.Localize(
+                 "LoadingDialogContentInfo",
+-                "Some of the plugins you have installed through Dalamud are taking a long time to load.\n" +
+-                "This is likely normal, please wait a little while longer."));
++                "Moonwake is preparing the core and enabled plugins.\n" +
++                "You can expand the log below to view the current operation."));
+ 
+         if (this.CurrentState == State.LoadingPlugins)
+         {
+@@ -188,7 +188,7 @@ internal sealed class LoadingDialog
+                 .Append(
+                     Loc.Localize(
+                         "LoadingDialogContentTakingTooLong",
+-                        "It's been a while now. Please report this issue on our Discord server."));
++                        "Initialization is taking longer than expected. Save the log and restart with plugins disabled to isolate the issue."));
+         }
+ 
+         fixed (void* pszText = contentBuilder.ToString())
+@@ -296,7 +296,7 @@ internal sealed class LoadingDialog
+                 : Icon.ExtractAssociatedIcon(Path.Combine(workingDirectory, "Dalamud.Injector.exe"));
+ 
+         fixed (char* pszEmpty = "-")
+-        fixed (char* pszWindowTitle = "Dalamud")
++        fixed (char* pszWindowTitle = "Moonwake")
+         fixed (char* pszDalamudBoot = "Dalamud.Boot.dll")
+         fixed (char* pszThemesManifestResourceName = "RT_MANIFEST_THEMES")
+         fixed (char* pszHide = Loc.Localize("LoadingDialogHide", "Hide"))

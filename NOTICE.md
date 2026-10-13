@@ -1,6 +1,6 @@
 # Attribution
 
-Moonwake is maintained by Endfish. It is an independent project and does not represent its upstream projects.
+Moonwake is an independent project and does not represent its upstream projects.
 
 - The desktop host derives from Endfish's MIT-licensed DalamudStandaloneCN (commit `69aa81e1102a4e93adde9597bc440f454701e94c`).
 - Dalamud is copyright its respective contributors, licensed under AGPL-3.0-or-later. Its exact international base is recorded in `upstream.lock.json`. Patches to Dalamud in this repository are distributed under that same license.

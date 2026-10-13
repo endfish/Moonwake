@@ -31,6 +31,7 @@ Invoke-WebRequest "$base/LICENSE" -OutFile (Join-Path $assets 'LICENSE-DalamudAs
 $fontBase = "https://raw.githubusercontent.com/$($lock.chineseFont.repository)/$($lock.chineseFont.commit)"
 Invoke-WebRequest "$fontBase/$($lock.chineseFont.path)" -OutFile (Join-Path $assets 'UIRes/NotoSansCJKsc-Medium.otf')
 Invoke-WebRequest "$fontBase/Sans/LICENSE" -OutFile (Join-Path $assets 'LICENSE-NotoCJK.txt')
+& (Join-Path $PSScriptRoot 'apply-brand-assets.ps1') -AssetDirectory $assets
 foreach ($relative in $runtimePaths) {
     $destination = Join-Path $runtime $relative
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null

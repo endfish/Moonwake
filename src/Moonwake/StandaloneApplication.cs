@@ -54,7 +54,7 @@ internal static class StandaloneApplication
                 case "inject":
                     return await InjectAsync(args, paths, configuration, validator, logger);
                 case "help": case "--help": case "-h":
-                    Console.WriteLine("Moonwake by Endfish\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");
+                    Console.WriteLine("Moonwake\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");
                     return 0;
                 default:
                     logger.Error("未知命令。使用 Moonwake help 查看可用命令。");

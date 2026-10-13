@@ -65,6 +65,7 @@ try
     files["../outside.dll"] = new string('0', 64);
     WriteManifest();
     ExpectFailure(() => PayloadIntegrity.Verify(payload), "manifest path traversal is rejected");
+    passed += ImportTests.Run(paths);
     Console.WriteLine($"PASS: {passed} checks");
     return 0;
 

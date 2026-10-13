@@ -6,11 +6,11 @@
 
 **A quiet companion for your next adventure.**
 
-独立的国服 Dalamud 注入工具 · by Endfish
+国服 Dalamud 注入工具
 
 </div>
 
-Moonwake 附加到已经启动的 FFXIV 客户端，为它加载独立维护的 Dalamud。无需通过登录器启动游戏；不处理账号、密码、登录或游戏更新。
+Moonwake 附加到已经启动的 FFXIV 客户端，为它加载 Dalamud 核心。无需通过登录器启动游戏；不处理账号、密码、登录或游戏更新。
 
 **开发预览：尚未完成新核心的游戏内验证，当前没有受支持的正式游戏版本，也没有公开二进制发行版。**
 
@@ -22,14 +22,7 @@ Moonwake 附加到已经启动的 FFXIV 客户端，为它加载独立维护的 
 
 Moonwake 使用自己的 `%APPDATA%/Moonwake` 数据目录。旧环境可以保留用于过渡，两个核心不能同时注入同一个游戏进程。
 
-## 独立维护
-
-- 核心源码直接固定到 [goatcorp/Dalamud](https://github.com/goatcorp/Dalamud)。
-- 客户端结构直接固定到 [aers/FFXIVClientStructs](https://github.com/aers/FFXIVClientStructs)。
-- `upstream.lock.json` 记录基线；`patches/` 分开记录国服适配、独立运行支持和 Moonwake 策略。
-- 不内置官方插件仓库，不读取外部插件黑名单。技术兼容性检查继续保留。
-- 不提供官方分支、反馈或核心更新服务。市场板上传默认关闭。
-- 插件仓库由使用者明确添加；第三方插件本身的网络行为不由此保证。
+“导入插件”会复制已有环境中 API 15 的插件及可选配置，保留源目录和 Moonwake 中已有的内容。导入的插件默认禁用，请在游戏内逐项启用并测试；仓库地址可单独选择，默认不导入。
 
 ## 从源码构建
 
@@ -47,6 +40,6 @@ Moonwake 使用自己的 `%APPDATA%/Moonwake` 数据目录。旧环境可以保�
 
 ## 来源与许可
 
-Moonwake 桌面壳由 Endfish 编写，源自 Endfish 的 DalamudStandaloneCN，使用 MIT 许可。Dalamud 补丁按 AGPL-3.0-or-later 提供，FFXIVClientStructs 补丁按 MIT 提供；上游及参考实现的版权声明保留在 `licenses/` 和 `NOTICE.md`。
+Moonwake 桌面壳由 Astra 编写，采用 AI 开发，不喜勿用。桌面壳使用 MIT 许可。Dalamud 补丁按 AGPL-3.0-or-later 提供，FFXIVClientStructs 补丁按 MIT 提供；上游及参考实现的版权声明保留在 `licenses/` 和 `NOTICE.md`。
 
 Moonwake 是独立项目，与 Square Enix、goatcorp 或 OtterCorp 无隶属关系。
