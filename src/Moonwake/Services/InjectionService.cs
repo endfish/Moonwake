@@ -25,8 +25,7 @@ internal sealed class InjectionService(
         if (target.DalamudState == DalamudModuleState.Unknown)
             return InjectionResult.Refused($"无法确认 PID {target.ProcessId} 的模块状态，拒绝注入。{target.InspectionError}");
 
-        var isSupported = target.GameVersion is not null &&
-                          configuration.SupportedGameVersions.Contains(target.GameVersion, StringComparer.Ordinal);
+        var isSupported = configuration.IsGameVersionSupported(target.GameVersion);
         if (!isSupported && !researchMode)
         {
             var version = target.GameVersion ?? "未知";
@@ -48,39 +47,7 @@ internal sealed class InjectionService(
         // Capture the instance before passing its PID to the injector; retain the handle until it completes.
         using var targetSession = GameSession.Capture(target);
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = payload.Layout.InjectorPath,
-            WorkingDirectory = payload.Layout.PayloadDirectory,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-
-        startInfo.Environment["DOTNET_ROOT"] = payload.Layout.RuntimeDirectory;
-        startInfo.Environment["DOTNET_ROOT_X64"] = payload.Layout.RuntimeDirectory;
-        startInfo.Environment["DOTNET_MULTILEVEL_LOOKUP"] = "0";
-
-        AddArgument(startInfo, "inject");
-        AddArgument(startInfo, target.ProcessId.ToString(CultureInfo.InvariantCulture));
-        AddArgument(startInfo, $"--dalamud-working-directory={payload.Layout.PayloadDirectory}");
-        AddArgument(startInfo, $"--dalamud-configuration-path={paths.DalamudConfigurationPath}");
-        AddArgument(startInfo, $"--dalamud-plugin-directory={paths.InstalledPluginsDirectory}");
-        AddArgument(startInfo, $"--dalamud-asset-directory={payload.Layout.AssetDirectory}");
-        AddArgument(startInfo, $"--dalamud-runtime-directory={payload.Layout.RuntimeDirectory}");
-        AddArgument(startInfo, $"--dalamud-temp-directory={paths.TempDirectory}");
-        AddArgument(startInfo, $"--dalamud-delay-initialize={configuration.InitializationDelayMs}");
-        AddArgument(startInfo, "--dalamud-client-language=chinesesimplified");
-        AddArgument(startInfo, $"--logpath={paths.LogDirectory}");
-        AddArgument(startInfo, "--logname=moonwake");
-        AddArgument(startInfo, "-v");
-
-        if (researchMode)
-            AddArgument(startInfo, "--warn");
-
-        if (noPlugins || !configuration.LoadPluginsByDefault)
-            AddArgument(startInfo, "--no-plugin");
+        var startInfo = this.CreateStartInfo(target, configuration, payload.Layout, researchMode, noPlugins);
 
         logger.Info($"调用 Injector 注入 PID {target.ProcessId}。Payload={payload.Layout.PayloadDirectory}");
 
@@ -102,6 +69,47 @@ internal sealed class InjectionService(
         return injector.ExitCode == 0
                    ? new InjectionResult(true, 0, $"Injector 已完成 PID {target.ProcessId} 的注入调用。")
                    : new InjectionResult(false, injector.ExitCode, $"Injector 退出码：{injector.ExitCode}");
+    }
+
+    internal ProcessStartInfo CreateStartInfo(GameProcessInfo target, StandaloneConfiguration configuration,
+        PayloadLayout payload, bool researchMode, bool noPlugins)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = payload.InjectorPath,
+            WorkingDirectory = payload.PayloadDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        startInfo.Environment.Remove("DALAMUD_NOT_HAVE_PLUGINS");
+        startInfo.Environment["DOTNET_ROOT"] = payload.RuntimeDirectory;
+        startInfo.Environment["DOTNET_ROOT_X64"] = payload.RuntimeDirectory;
+        startInfo.Environment["DOTNET_MULTILEVEL_LOOKUP"] = "0";
+
+        AddArgument(startInfo, "inject");
+        AddArgument(startInfo, target.ProcessId.ToString(CultureInfo.InvariantCulture));
+        AddArgument(startInfo, $"--dalamud-working-directory={payload.PayloadDirectory}");
+        AddArgument(startInfo, $"--dalamud-configuration-path={paths.DalamudConfigurationPath}");
+        AddArgument(startInfo, $"--dalamud-plugin-directory={paths.InstalledPluginsDirectory}");
+        AddArgument(startInfo, $"--dalamud-asset-directory={payload.AssetDirectory}");
+        AddArgument(startInfo, $"--dalamud-runtime-directory={payload.RuntimeDirectory}");
+        AddArgument(startInfo, $"--dalamud-temp-directory={paths.TempDirectory}");
+        AddArgument(startInfo, $"--dalamud-delay-initialize={configuration.InitializationDelayMs}");
+        AddArgument(startInfo, "--dalamud-client-language=chinesesimplified");
+        AddArgument(startInfo, $"--logpath={paths.LogDirectory}");
+        AddArgument(startInfo, "--logname=moonwake");
+        AddArgument(startInfo, "-v");
+
+        if (researchMode)
+            AddArgument(startInfo, "--warn");
+
+        if (researchMode || noPlugins || !configuration.LoadPluginsByDefault)
+            AddArgument(startInfo, "--no-plugin");
+
+        return startInfo;
     }
 
     private static void AddArgument(ProcessStartInfo startInfo, string argument) =>

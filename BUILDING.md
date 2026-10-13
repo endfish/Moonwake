@@ -44,9 +44,9 @@ Resource preparation also applies the Moonwake logo and the terminology overlay 
 
 Run `scripts/check-localization.ps1 -SourceRoot <prepared-Dalamud-directory> -AssetDirectory <asset-directory>` to check translated UI keys, chat-channel labels and style-color labels. Chat labels follow the CN client's terminology; Debug retains its original label. Technical identifiers and font names retain their original spelling.
 
-The host is a Windows GUI executable, so double-clicking it creates no console window. Pipe CLI calls to `Out-Host` in PowerShell, or redirect their output from a parent process. `scripts/check-shell.ps1` verifies the executable subsystem and redirected CLI output after publishing.
+The host is a Windows GUI executable with a `requireAdministrator` manifest. Double-clicking requests elevation without creating a console window; the Windows prompt must be handled by the user. Run EXE CLI calls from an elevated shell and pipe them to `Out-Host`, or redirect output from an elevated parent process. `scripts/check-shell.ps1` verifies the compiled GUI subsystem and administrator manifest, then tests CLI output through the managed assembly without requesting interactive elevation on a build agent.
 
-The default data location is `%APPDATA%/Moonwake`. `MOONWAKE_HOME` overrides it for experiments. Test resources and payloads stay out of Git. Resource preparation refuses existing destination directories; use a new test home for another bundle.
+The default data location is `%APPDATA%/Moonwake`. To bind a prepared profile to a desktop EXE, put a `moonwake.profile.json` file beside it with a `homeDirectory` string. Relative directories are resolved against the EXE directory, so elevation and a different working directory do not switch profiles. For example, `{"homeDirectory":"../profile"}` uses a sibling profile folder. `MOONWAKE_HOME` takes priority over this file. The selector, test resources and payloads stay out of Git. Resource preparation refuses existing destination directories; use a new test home for another bundle.
 
 The desktop import dialog copies API 15 plugin files and optional per-plugin configuration from an existing profile. Existing target plugins and configuration are preserved, copied plugins receive new disabled identities, and repository URLs require individual selection. The optional development-plugin import keeps existing DLL build paths and reload preferences, copies plugin configuration, creates independent identities and disables startup loading. Only currently configured, valid API 15 development entries are considered. Installed-plugin and configuration directories remain isolated; the source core and unrelated global preferences are not imported. API matching is only an initial filter, not proof of game compatibility. File staging and rollback protect against partial copies; staging files and configuration backups remain under `imports/`.
 
@@ -54,7 +54,7 @@ Opening the plugin manager uses its current in-memory repository snapshot. Start
 
 ## Compatibility and testing
 
-New configuration has an empty `supportedGameVersions` list and disables plugin loading. Ordinary injection remains unavailable until a precise game version has passed in-game checks. An explicit diagnostic command is available for controlled tests:
+New configuration admits the currently adapted CN client `2026.10.06.0000.0000` and enables ordinary plugin loading. The desktop always uses ordinary injection and does not enable safe mode. Other client versions require a matching adaptation. An explicit research mode remains available only as a diagnostic CLI command:
 
 ```powershell
 ./artifacts/shell/Moonwake.exe inject --pid <game-pid> --research | Out-Host
@@ -68,8 +68,8 @@ Offline checks include the shell lifecycle/gating suite, upstream core tests, FF
 
 For a client update, run `scripts/check-client.ps1 -GameExecutable <ffxiv_dx11.exe> -SourceRoot <prepared-Dalamud-directory>`. It records the client version, executable hash, source recipe and resolved/total signature counts under `artifacts/`. Missing signatures fail the check even when the upstream resolver process exits successfully. The check does not add a supported game version. Use `scripts/check-layout.ps1` separately to compare inherited layout diagnostics.
 
-Before admitting a client version, verify startup, Chinese fonts and text input, UI interaction, login/logout, scene transitions, core configuration, clean game exit, and selected plugins in an isolated test profile. No game files or local test logs belong in this repository.
+Before a public binary release, verify startup, Chinese fonts and text input, UI interaction, login/logout, scene transitions, core configuration, clean game exit, and selected plugins. Record the scope of completed checks separately from local-use configuration. No game files or local test logs belong in this repository.
 
 ## Distribution status
 
-This is a development preview. There is no supported client version or published binary release yet. A future release can package the EXE, independently built core, runtime, assets and license notices after game validation and a separate packaging review. The AGPL-covered core must retain its corresponding source and notices.
+The current adaptation targets CN client `2026.10.06.0000.0000` for local use. There is no published binary release yet. A future release can package the EXE, independently built core, runtime, assets and license notices after broader game validation and a separate packaging review. The AGPL-covered core must retain its corresponding source and notices.

@@ -17,7 +17,7 @@ try
     paths.EnsureDirectories();
     using var logger = new StandaloneLogger(paths);
     var config = new ConfigurationStore(paths).LoadOrCreate();
-    Assert(config.SupportedGameVersions.Count == 0 && !config.LoadPluginsByDefault, "new installs have no admitted versions or enabled plugins");
+    Assert(config.SupportedGameVersions.SequenceEqual(["2026.10.06.0000.0000"]) && config.LoadPluginsByDefault, "new installs use the adapted client version and normal plugin loading");
     Assert(paths.HomeDirectory == testRoot && !paths.HomeDirectory.Contains("XIVLauncher"), "isolated home selection");
     paths.EnsureConfiguredDirectories(config);
     Assert(!new PayloadValidator(paths).Validate(config).IsValid, "empty resource directories are not considered a prepared installation");
@@ -66,6 +66,7 @@ try
     WriteManifest();
     ExpectFailure(() => PayloadIntegrity.Verify(payload), "manifest path traversal is rejected");
     passed += ImportTests.Run(paths);
+    passed += StartupTests.Run(testRoot);
     Console.WriteLine($"PASS: {passed} checks");
     return 0;
 

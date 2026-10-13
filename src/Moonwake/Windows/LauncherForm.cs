@@ -186,27 +186,12 @@ internal sealed class LauncherForm : Form
     private void UpdateState()
     {
         if (this.preview || this.busy || this.attached) return;
-        this.inject.Enabled = false;
-        if (this.processes.SelectedItem is not ProcessItem item)
-        {
-            this.SetStatus("启动游戏后，将自动选择进程。");
-            return;
-        }
-        var process = item.Process;
-        this.tooltips.SetToolTip(this.processes, $"游戏版本：{process.GameVersion ?? "未知"}\n{process.ExecutablePath}");
-        if (process.DalamudState == DalamudModuleState.Loaded)
-            this.SetStatus("此进程已加载 Dalamud。");
-        else if (process.DalamudState == DalamudModuleState.Unknown)
-            this.SetStatus("无法读取模块，请检查与游戏的运行权限。");
-        else if (process.GameVersion is null || !this.configuration.SupportedGameVersions.Contains(process.GameVersion, StringComparer.Ordinal))
-            this.SetStatus("当前游戏版本尚未通过验证。");
-        else if (!this.validator.Validate(this.configuration).IsValid)
-            this.SetStatus("本地核心与运行资源尚未准备完成。");
-        else
-        {
-            this.SetStatus(this.lastFailure ?? "注入后隐藏窗口，游戏退出时自动关闭。");
-            this.inject.Enabled = true;
-        }
+        var process = (this.processes.SelectedItem as ProcessItem)?.Process;
+        this.tooltips.SetToolTip(this.processes, $"游戏版本：{process?.GameVersion ?? "未知"}\n{process?.ExecutablePath}");
+        var readiness = LauncherReadiness.Evaluate(process, this.configuration, this.validator.Validate(this.configuration).IsValid);
+        this.inject.Text = "注入";
+        this.inject.Enabled = readiness.CanInject;
+        this.SetStatus(readiness.CanInject ? this.lastFailure ?? readiness.Message : readiness.Message);
     }
 
     private async void InjectAsync(object? sender, EventArgs args)
@@ -223,6 +208,7 @@ internal sealed class LauncherForm : Form
         {
             var target = this.processService.Find(selected.Process.ProcessId) ?? throw new InvalidOperationException("所选游戏已退出。");
             if (target.StartTimeUtcTicks != selected.Process.StartTimeUtcTicks) throw new InvalidOperationException("游戏进程已变化，请重新选择。");
+            if (target.GameVersion != selected.Process.GameVersion) throw new InvalidOperationException("游戏版本已变化，请重新选择。");
             using var session = GameSession.Capture(target);
             var result = await this.injectionService.InjectAsync(target, this.configuration, false, false, this.lifetime.Token);
             if (!result.Success) throw new InvalidOperationException(result.Message);

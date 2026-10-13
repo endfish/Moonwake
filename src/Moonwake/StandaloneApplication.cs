@@ -9,11 +9,13 @@ internal static class StandaloneApplication
 {
     public static int RunGui()
     {
-        var paths = StandalonePaths.Create();
-        paths.EnsureDirectories();
-        using var logger = new StandaloneLogger(paths);
+        StandaloneLogger? logger = null;
         try
         {
+            var paths = StandalonePaths.Create();
+            paths.EnsureDirectories();
+            logger = new StandaloneLogger(paths);
+            logger.Info($"数据目录：{paths.HomeDirectory}");
             var configuration = new ConfigurationStore(paths).LoadOrCreate();
             var validator = new PayloadValidator(paths);
             Application.Run(new LauncherForm(configuration, new GameProcessService(), new InjectionService(paths, validator, logger), logger, paths));
@@ -21,10 +23,11 @@ internal static class StandaloneApplication
         }
         catch (Exception ex)
         {
-            logger.Error(ex.ToString());
+            logger?.Error(ex.ToString());
             MessageBox.Show(ex.Message, "Moonwake 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+        finally { logger?.Dispose(); }
     }
 
     public static async Task<int> RunAsync(string[] args)

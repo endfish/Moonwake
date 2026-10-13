@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Executable)
+param([string]$Executable, [string]$ManagedAssembly)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (!$Executable) { $Executable = Join-Path $repoRoot 'artifacts/shell/Moonwake.exe' }
@@ -11,8 +11,24 @@ try {
     $peOffset = $reader.ReadInt32()
     $stream.Position = $peOffset + 24 + 68
     if ($reader.ReadUInt16() -ne 2) { throw 'The desktop EXE must use the Windows GUI subsystem.' }
+    $stream.Position = 0
+    $pe = [Reflection.PortableExecutable.PEReader]::new($stream, [Reflection.PortableExecutable.PEStreamOptions]::LeaveOpen)
+    try {
+        $resources = $pe.PEHeaders.SectionHeaders | Where-Object Name -eq '.rsrc'
+        if (!$resources) { throw 'The desktop EXE must contain a Windows application manifest.' }
+        $stream.Position = $resources.PointerToRawData
+        $resourceText = [Text.Encoding]::UTF8.GetString($reader.ReadBytes($resources.SizeOfRawData))
+        if ($resourceText -notmatch 'requestedExecutionLevel\s+level="requireAdministrator"\s+uiAccess="false"') {
+            throw 'The desktop EXE must request administrator privileges.'
+        }
+    } finally { $pe.Dispose() }
 } finally { $reader.Dispose() }
-$start = [Diagnostics.ProcessStartInfo]::new($Executable)
+if (!$ManagedAssembly) { $ManagedAssembly = Join-Path $repoRoot 'src/Moonwake/bin/Release/net10.0-windows/win-x64/Moonwake.dll' }
+$ManagedAssembly = (Resolve-Path -LiteralPath $ManagedAssembly).Path
+# Test the CLI implementation without triggering an interactive UAC prompt on build agents.
+# The apphost's GUI subsystem and administrator manifest are checked separately above.
+$start = [Diagnostics.ProcessStartInfo]::new((Get-Command dotnet).Source)
+$start.ArgumentList.Add($ManagedAssembly)
 $start.ArgumentList.Add('help')
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
@@ -28,4 +44,4 @@ try {
     $errors = $errorTask.GetAwaiter().GetResult()
     if ($process.ExitCode -ne 0 -or $output -notmatch 'inject --pid' -or $errors) { throw 'CLI help output or exit code is incorrect.' }
 } finally { $process.Dispose() }
-Write-Output 'PASS: GUI executable has no startup console and retains redirected CLI output.'
+Write-Output 'PASS: GUI executable requests administrator privileges; managed CLI retains redirected output.'

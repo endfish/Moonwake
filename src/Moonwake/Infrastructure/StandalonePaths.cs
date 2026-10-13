@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Moonwake.Configuration;
 
 namespace Moonwake.Infrastructure;
@@ -37,14 +38,26 @@ internal sealed class StandalonePaths
 
     public static StandalonePaths Create()
     {
-        var configuredHome = Environment.GetEnvironmentVariable("MOONWAKE_HOME");
-        var home = string.IsNullOrWhiteSpace(configuredHome)
-                       ? Path.Combine(
-                           Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                           "Moonwake")
-                       : Environment.ExpandEnvironmentVariables(configuredHome.Trim());
+        return new StandalonePaths(ResolveHome(AppContext.BaseDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetEnvironmentVariable("MOONWAKE_HOME")));
+    }
 
-        return new StandalonePaths(Path.GetFullPath(home));
+    internal static string ResolveHome(string executableDirectory, string applicationDataDirectory, string? configuredHome)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredHome))
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredHome.Trim()));
+
+        var profilePath = Path.Combine(executableDirectory, "moonwake.profile.json");
+        if (!File.Exists(profilePath)) return Path.Combine(applicationDataDirectory, "Moonwake");
+        try
+        {
+            using var profile = JsonDocument.Parse(File.ReadAllText(profilePath));
+            if (profile.RootElement.ValueKind != JsonValueKind.Object || !profile.RootElement.TryGetProperty("homeDirectory", out var home) || home.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(home.GetString()))
+                throw new InvalidDataException("moonwake.profile.json 必须包含 homeDirectory 数据目录。");
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(home.GetString()!.Trim()), executableDirectory);
+        }
+        catch (JsonException ex) { throw new InvalidDataException("moonwake.profile.json 格式无效，请检查启动配置。", ex); }
     }
 
     public void EnsureDirectories()

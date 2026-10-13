@@ -10,13 +10,15 @@ internal sealed class StandaloneConfiguration
 
     public string RuntimeDirectory { get; set; } = "runtime";
 
-    public List<string> SupportedGameVersions { get; set; } = [];
+    public List<string> SupportedGameVersions { get; set; } = ["2026.10.06.0000.0000"];
 
     public int PollIntervalSeconds { get; set; } = 2;
 
     public int InitializationDelayMs { get; set; }
 
-    public bool LoadPluginsByDefault { get; set; } = false;
+    public bool LoadPluginsByDefault { get; set; } = true;
+
+    public bool IsGameVersionSupported(string? version) => version is not null && this.SupportedGameVersions.Contains(version, StringComparer.Ordinal);
 
     public void Normalize()
     {
