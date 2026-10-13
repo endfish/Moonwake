@@ -1,0 +1,11 @@
+{
+  "assets": {
+    "repository": "goatcorp/DalamudAssets",
+    "commit": "9e35a9f4a031de55022334c047efc03471132598"
+  },
+  "chineseFont": {
+    "repository": "notofonts/noto-cjk",
+    "commit": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+    "path": "Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Medium.otf"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "dalamud": {
+    "repository": "https://github.com/goatcorp/Dalamud.git",
+    "commit": "b666d821a47306fb447c60155b5d99377f91a5ee",
+    "version": "15.0.3.6"
+  },
+  "clientStructs": {
+    "repository": "https://github.com/aers/FFXIVClientStructs.git",
+    "commit": "2b62fe9346a3efe00c3724ca509a88228f7d551e"
+  }
+}

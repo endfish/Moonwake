@@ -1,0 +1,9 @@
+Field overlap detected in Component::GUI::AtkModule with field TextInput
+Field overlap detected in Client::UI::RaptureAtkModule with field UIScene
+Field overlap detected in Client::UI::RaptureAtkModule with field UIMode
+Field offset exceeds struct size in Client::System::Framework::GameWindow with field SessionId
+Field size exceeds struct size in Client::System::Framework::GameWindow with field SessionId
+Field offset exceeds struct size in Client::System::Framework::GameWindow with field SndaID
+Field size exceeds struct size in Client::System::Framework::GameWindow with field SndaID
+Field offset exceeds struct size in Client::System::Framework::GameWindow with field cmdLine
+Field size exceeds struct size in Client::System::Framework::GameWindow with field cmdLine

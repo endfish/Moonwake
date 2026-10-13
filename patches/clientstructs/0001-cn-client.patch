@@ -1,0 +1,492 @@
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/Event/GuildleveAssignmentEventHandler.cs b/FFXIVClientStructs/FFXIV/Client/Game/Event/GuildleveAssignmentEventHandler.cs
+index 397a4d05..cbf12850 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Game/Event/GuildleveAssignmentEventHandler.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Game/Event/GuildleveAssignmentEventHandler.cs
+@@ -44,7 +44,7 @@ public unsafe partial struct GuildleveAssignmentEventHandler {
+     [FieldOffset(0x6C0)] public StdVector<GuildleveAssignmentCategoryList> AssignmentLists;
+     // No idea about this one. Showed ids (probably leve ids)
+     //[FieldOffset(0x6D8)] private StdMap<ushort, GuildleveLeveInfo> LeveInfoMap;
+-    // No idea if the following three are correct. They temporarily get set when you open a new tab when it is loaded. 
++    // No idea if the following three are correct. They temporarily get set when you open a new tab when it is loaded.
+     [FieldOffset(0x6E8)] private StdVector<ushort> PendingLeveIds;
+     [FieldOffset(0x700)] private long PendingLeveCursor;
+     [FieldOffset(0x708)] private ExcelSheet* PendingSheet;
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/HousingManager.cs b/FFXIVClientStructs/FFXIV/Client/Game/HousingManager.cs
+index 5304054d..5c78bfc3 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Game/HousingManager.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Game/HousingManager.cs
+@@ -149,7 +149,7 @@ public unsafe partial struct HousingManager {
+     /// <returns>True or False</returns>
+     [MemberFunction("E8 ?? ?? ?? ?? 88 45 38")]
+     public static partial bool IsSubmarineExplorationExplored(byte point);
+-    
++
+     [MemberFunction("48 83 EC ?? 45 0F B6 C0 45 33 C9 0F B7 D2")]
+     public static partial void RequestWardInfo(ushort territoryType, byte wardIndex);
+ 
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/UI/CharaCard.cs b/FFXIVClientStructs/FFXIV/Client/Game/UI/CharaCard.cs
+index e897ee81..df541cf8 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Game/UI/CharaCard.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Game/UI/CharaCard.cs
+@@ -27,7 +27,7 @@ public unsafe partial struct CharaCard {
+     [MemberFunction("48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 8B 0D")]
+     public partial void RequestCharaCardUpdate();
+ 
+-    [MemberFunction("40 53 48 83 EC ?? 48 8B DA 0F B6 52")]
++    [MemberFunction("40 53 48 83 EC ?? 48 8B DA 0F B6 52 28 84 D2 74 ?? 66 83 7B 7A 00")]
+     public partial void HandleCurrentCharaCardDataPacket(CharaCardPacket* packet);
+ }
+ 
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/UI/ContentsFinder.cs b/FFXIVClientStructs/FFXIV/Client/Game/UI/ContentsFinder.cs
+index 0e43258b..93602a71 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Game/UI/ContentsFinder.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Game/UI/ContentsFinder.cs
+@@ -81,7 +81,7 @@ public unsafe partial struct ContentsFinderQueueInfo {
+     [MemberFunction("48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC 20 8B FA 48 8B D9 45 84 C0")]
+     public partial void UpdateQueueState(ContentsFinderQueueState newState, bool beganQueue);
+ 
+-    [MemberFunction("4C 8B DC 55 41 54 41 56 49 8D 6B ?? 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? 80 79 ?? 00")]
++    [MemberFunction("4C 8B DC 55 56 41 57 49 8D 6B ?? 48 81 EC 40 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 ?? 80 79 ?? ?? 44 0F B6 FA")]
+     public partial void QueueRoulette(byte contentRouletteId, byte a3 = 0);
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? B0 ?? 45 88 A7 ?? ?? ?? ?? E9 ?? ?? ?? ?? 45 0F B6 87")]
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/XBMManager.cs b/FFXIVClientStructs/FFXIV/Client/Game/XBMManager.cs
+index db9b2214..3fde7a1e 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Game/XBMManager.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Game/XBMManager.cs
+@@ -19,7 +19,7 @@ public unsafe partial struct XBMManager {
+     [MemberFunction("E8 ?? ?? ?? ?? E8 ?? ?? ?? ?? BA ?? ?? ?? ?? 48 8B C8 E8 ?? ?? ?? ?? 48 85 C0 74 ?? 48 8B C8")]
+     public partial void SetPetUnlocked(ushort petId);
+ 
+-    [MemberFunction("48 89 5C 24 ?? 57 48 83 EC ?? ?? ?? ?? BF ?? ?? ?? ?? C7 41")]
++    [MemberFunction("48 89 5C 24 ?? 57 48 83 EC ?? 0F 10 02 BF ?? ?? ?? ?? C7 41")]
+     public partial void HandlePetListPacket(nint packet);
+ 
+     public enum DataState {
+diff --git a/FFXIVClientStructs/FFXIV/Client/Network/PacketDispatcher.cs b/FFXIVClientStructs/FFXIV/Client/Network/PacketDispatcher.cs
+index 36248085..6f7e8976 100644
+--- a/FFXIVClientStructs/FFXIV/Client/Network/PacketDispatcher.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Network/PacketDispatcher.cs
+@@ -33,7 +33,7 @@ public unsafe partial struct PacketDispatcher {
+         GameObjectId targetId,
+         bool isRecorded);
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F ?? 48 8B D3 E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F ?? 41 B0 ?? 48 8B D3 E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F ?? 41 B0 ?? 48 8B D3 E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F ?? 41 B0 ?? 48 8B D3 E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F")]
++    [MemberFunction("44 0F B6 C2 48 8B D1 48 8D 0D ?? ?? ?? ?? E9 ?? ?? ?? ?? CC")]
+     public static partial void HandlePrepareZoningPacket(PrepareZoningPacket* packet, byte a2);
+ 
+     [MemberFunction("4C 8B DC 55 56 41 56 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 ?? ?? ?? ?? 41 0F B6 F0")]
+@@ -57,7 +57,7 @@ public unsafe partial struct PacketDispatcher {
+     [MemberFunction("48 89 5C 24 ?? 57 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 ?? 0F B7 5A")]
+     public static partial void HandleInventoryItemUpdatePacket(uint targetId, InventoryItemPacket* packet);
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? EB ?? 3D ?? ?? ?? ?? 75 ?? 48 8D 53 ?? 81 FE")]
++    [MemberFunction("48 89 5C 24 ?? 57 48 83 EC ?? 0F B7 5A 08 48 8B FA")]
+     public static partial void HandleInventoryItemPacket(uint targetId, InventoryItemPacket* packet);
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? EB 13 3D")]
+@@ -93,7 +93,7 @@ public unsafe partial struct PacketDispatcher {
+     [MemberFunction("40 53 57 48 81 EC ?? ?? ?? ?? 48 8B FA 8B")]
+     public static partial void HandleActorCastPacket(uint entityId, ActorCastPacket* packet);
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 48 8B CB E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 48 8B CB E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 48 8B CB E8 ?? ?? ?? ?? B0 ?? 48 8B 5C 24 ?? 48 8B 74 24 ?? 48 83 C4 ?? 5F C3 8B 4F ?? 41 B0")]
++    [MemberFunction("40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 8B D3 48 8B C8 48 83 C4 20 5B E9 ?? ?? ?? ?? CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC 40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 8B C8 E8 ?? ?? ?? ?? 48 85 C0 74 10")]
+     public static partial void HandleMapEffectPacket(MapEffectPacket* packet);
+ 
+     [MemberFunction("4C 8D 89 ?? ?? ?? ?? 48 8B D1")]
+diff --git a/FFXIVClientStructs/FFXIV/Client/SupportDesk/HttpRequestImpl.cs b/FFXIVClientStructs/FFXIV/Client/SupportDesk/HttpRequestImpl.cs
+index a6379d9e..45f28eb4 100644
+--- a/FFXIVClientStructs/FFXIV/Client/SupportDesk/HttpRequestImpl.cs
++++ b/FFXIVClientStructs/FFXIV/Client/SupportDesk/HttpRequestImpl.cs
+@@ -31,7 +31,6 @@ public unsafe partial struct HttpRequestImpl {
+     [MemberFunction("48 85 D2 0F 84 ?? ?? ?? ?? 48 89 5C 24 ?? 56 57")]
+     public static partial void StatusCallback(void* requestHandle, HttpRequestImpl* context, uint internetStatus, void* statusInformation, uint statusInformationLength);
+ }
+-
+ public enum HttpRequestStage {
+     Unk0 = 0,
+     /// <remarks> Set during BeginRequest. </remarks>
+@@ -56,4 +55,3 @@ public enum HttpRequestStage {
+     /// <remarks> Set for WINHTTP_CALLBACK_STATUS_SECURE_FAILURE. </remarks>
+     SecureFailure = 14,
+ }
+-
+diff --git a/FFXIVClientStructs/FFXIV/Client/System/Framework/GameWindow.cs b/FFXIVClientStructs/FFXIV/Client/System/Framework/GameWindow.cs
+index e797e64e..38d5cff8 100644
+--- a/FFXIVClientStructs/FFXIV/Client/System/Framework/GameWindow.cs
++++ b/FFXIVClientStructs/FFXIV/Client/System/Framework/GameWindow.cs
+@@ -21,4 +21,14 @@ public unsafe partial struct GameWindow {
+     [FieldOffset(0x5C)] public int MinHeight;
+ 
+     public Span<CStringPointer> ArgumentsSpan => new(Arguments, ArgumentCount);
++
++    // Populated by the CN launch argument bridge.
++    [FieldOffset(0xA0)] private byte* SessionId;
++    [FieldOffset(0xA8)] private byte* SndaID;
++    [FieldOffset(0xB8)] private byte* cmdLine;
++
++    public ulong GetAid() {
++        var idString = Marshal.PtrToStringUTF8((nint)SndaID) ?? string.Empty;
++        return ulong.TryParse(idString, out var result) ? result : 0;
++    }
+ }
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentHousingPortal.cs b/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentHousingPortal.cs
+index e0ab0ac7..a81c9473 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentHousingPortal.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentHousingPortal.cs
+@@ -16,11 +16,11 @@ public unsafe partial struct AgentHousingPortal {
+     [FieldOffset(0x34)] public ushort PortalMenuAddonId;
+     [FieldOffset(0x36)] public ushort WardSelectAddonId;
+     [FieldOffset(0x38)] public ushort TerritoryType;
+-    
++
+     [FieldOffset(0x3C)] public int SelectedWardIndex;
+-    
++
+     [FieldOffset(0x44), FixedSizeArray] internal FixedSizeArray60<bool> _plotOccupied;
+-    
++
+     /// <summary>
+     /// 0 - Teleport to Personal Estate ward <br/>
+     /// 1 - Teleport to Free Company Estate ward <br/>
+@@ -32,34 +32,34 @@ public unsafe partial struct AgentHousingPortal {
+     [FieldOffset(0x80)] public int SelectedMenuAction;
+     [FieldOffset(0x84), FixedSizeArray] internal FixedSizeArray6<uint> _menuActions;
+     [FieldOffset(0x9C)] public uint MenuItemCount;
+-    
++
+     [MemberFunction("40 55 53 41 54 41 55 41 57 48 8D AC 24 ?? ?? ?? ?? B8")]
+     public partial void ReadPacket(HousingPortalPacket* packet);
+-    
++
+     [MemberFunction("E8 ?? ?? ?? ?? EB ?? BA ?? ?? ?? ?? EB ?? BA ?? ?? ?? ?? EB ?? 48 8B CE")]
+     public partial void SelectWard(int wardIndex);
+-    
++
+     /// <summary>
+     /// <see cref="SelectedMenuAction"/>
+     /// </summary>
+     [MemberFunction("48 89 6C 24 ?? 48 89 74 24 ?? 48 89 7C 24 ?? 41 56 48 83 EC ?? 8B B1 ?? ?? ?? ?? 48 8B F9 83 FE")]
+     public partial bool TeleportToOwnEstateWard();
+-    
++
+     [MemberFunction("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 48 8B F9 48 8B F2")]
+     public partial bool ProcessPortalMenuSelect(AtkValue* values);
+-    
++
+     [MemberFunction("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 48 8B F1 48 8B DA")]
+     public partial bool ProcessAction(AtkValue* values);
+-    
++
+     [MemberFunction("48 89 5C 24 ?? 57 48 83 EC ?? 48 8B D9 33 FF 89 79 ?? 48 8B CA E8 ?? ?? ?? ?? 83 F8 ?? 0F 84")]
+     public partial bool ProcessMenuConfirm(AtkValue* values);
+-    
++
+     [MemberFunction("40 53 48 83 EC ?? 48 8B D9 C7 41 ?? ?? ?? ?? ?? 48 8B CA E8 ?? ?? ?? ?? 85 C0 75 ?? 44 8B 43")]
+     public partial bool ConfirmTeleport(AtkValue* values);
+-    
++
+     [MemberFunction("E8 ?? ?? ?? ?? 48 8B 74 24 ?? B1 ?? EB")]
+     public partial void OpenPortalMenu(ushort territoryType, AtkModuleInterface.AtkEventInterface* eventInterface, uint menuAction);
+-    
++
+     [MemberFunction("E8 ?? ?? ?? ?? B3 ?? E9 ?? ?? ?? ?? 83 FD")]
+     public partial void ShowTeleportConfirm(CStringPointer text, uint callbackEventKind, ushort parentAddonId);
+ }
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentLobby.cs b/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentLobby.cs
+index 6592c620..09957365 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentLobby.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Agent/AgentLobby.cs
+@@ -149,7 +149,7 @@ public unsafe partial struct CharaSelectCharacterEntry {
+     [MemberFunction("0F B6 41 ?? 84 05 ?? ?? ?? ?? 0F 94 C0")]
+     public partial bool IsNotLocked();
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? 4C 8B 74 24 ?? 84 C0 75 ?? 48 8B CE")]
++    [MemberFunction("48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC 20 48 8B F9 E8 ?? ?? ?? ?? 84 C0 0F 84")]
+     public partial bool IsInDifferentRegion();
+ }
+ 
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Misc/ItemOrderModule.cs b/FFXIVClientStructs/FFXIV/Client/UI/Misc/ItemOrderModule.cs
+index 9510bb14..fd46e804 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Misc/ItemOrderModule.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Misc/ItemOrderModule.cs
+@@ -35,7 +35,7 @@ public unsafe partial struct ItemOrderModule {
+     [FieldOffset(0xD0)] public ItemOrderModuleSorter* SaddleBagSorter;
+     [FieldOffset(0xD8)] public ItemOrderModuleSorter* PremiumSaddleBagSorter;
+ 
+-    [MemberFunction("E9 ?? ?? ?? ?? 48 8B 41 ?? C3")]
++    [MemberFunction("4C 8B 81 ?? ?? ?? ?? 4D 85 C0 74 ?? 48 8B 91 ?? ?? ?? ?? 4C 8B D2")]
+     public partial ItemOrderModuleSorter* GetActiveRetainerSorter();
+ }
+ 
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureHotbarModule.cs b/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureHotbarModule.cs
+index 6e2d48b0..abb7f8ca 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureHotbarModule.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureHotbarModule.cs
+@@ -146,7 +146,7 @@ public unsafe partial struct RaptureHotbarModule {
+ 
+     [FieldOffset(0x2B3F0)] public bool PhantomActionsPresent;
+ 
+-    [MemberFunction("E9 ?? ?? ?? ?? 73 25")]
++    [MemberFunction("E9 ?? ?? ?? ?? 73 25 8B CA 49 8D 91 A0 00 00 00")]
+     public partial byte ExecuteSlot(HotbarSlot* hotbarSlot);
+ 
+     [MemberFunction("4C 8B C9 41 83 F8 10 73 45")]
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureTextModule.cs b/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureTextModule.cs
+index 78f452cc..8f143236 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureTextModule.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Misc/RaptureTextModule.cs
+@@ -91,7 +91,7 @@ public unsafe partial struct RaptureTextModule {
+ 
+     /// <summary> Sets global parameters 1, 4, 6 and 65 </summary>
+     /// <remarks> The caller must ensure the name pointer remains valid until the subsequent formatting call has processed global parameter 1. </remarks>
+-    [MemberFunction("E8 ?? ?? ?? ?? 83 EE 16")]
++    [MemberFunction("48 89 5C 24 ?? 55 56 57 41 56 41 57 48 81 EC A0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 ?? ?? ?? ?? 48 8B 01 45 8B F9 41 8B E8 48 8B F2 4C 8B F1 FF 50 ?? 48 8B 50")]
+     public partial void SetGlobalTempEntity1(CStringPointer name, int sex, uint objStrId);
+ 
+     /// <summary> Sets global parameters 2, 5, 7 and 66 </summary>
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/RaptureAtkModule.cs b/FFXIVClientStructs/FFXIV/Client/UI/RaptureAtkModule.cs
+index 76c0e976..05af195e 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/RaptureAtkModule.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/RaptureAtkModule.cs
+@@ -15,7 +15,7 @@ namespace FFXIVClientStructs.FFXIV.Client.UI;
+ //   Common::Configuration::ConfigBase::ChangeEventInterface
+ [GenerateInterop]
+ [Inherits<AtkModule>, Inherits<ChangeEventInterface>]
+-[StructLayout(LayoutKind.Explicit, Size = 0x2A980)]
++[StructLayout(LayoutKind.Explicit, Size = 0x2A970)]
+ [VirtualTable("48 8D 05 ?? ?? ?? ?? 48 89 8F ?? ?? ?? ?? 48 89 07", 3)]
+ public unsafe partial struct RaptureAtkModule {
+     public static RaptureAtkModule* Instance() {
+@@ -23,64 +23,64 @@ public unsafe partial struct RaptureAtkModule {
+         return uiModule == null ? null : uiModule->GetRaptureAtkModule();
+     }
+ 
+-    [FieldOffset(0x8310)] public GameUIScene UIScene;
+-    [FieldOffset(0x8312)] public GameUIMode UIMode;
+-
+-    [FieldOffset(0x83C0)] internal Utf8String Unk8358;
+-    [FieldOffset(0x8428), FixedSizeArray] internal FixedSizeArray6<Utf8String> _unkArray;
+-    [FieldOffset(0x8698)] public Utf8String ItalicOn; // <italic(1)>
+-    [FieldOffset(0x8700)] public Utf8String ItalicOff; // <italic(0)>
+-    [FieldOffset(0x8768)] public Utf8String BoldOn; // <bold(1)>
+-    [FieldOffset(0x87D0)] public Utf8String BoldOff; // <bold(0)>
+-
+-    [FieldOffset(0x887F)] public AgentUpdateFlags AgentUpdateFlag; // reset happens in RaptureAtkModule_OnUpdate
+-    [FieldOffset(0x8880), FixedSizeArray] internal FixedSizeArray991<AddonFactoryInfo> _addonFactories;
+-    [FieldOffset(0x12358)] public StdVector<Utf8String> AddonNames;
+-    [FieldOffset(0x12370)] public AddonConfig* AddonConfigPtr;
+-
+-    [FieldOffset(0x1237A)] public AtkCursor.CursorType CursorType;
+-
+-    // [FieldOffset(0x12380)] public ProhibitModule ProhibitModule;
+-    [FieldOffset(0x12418)] public int AudioClientRpcTagSize;
+-
+-    [FieldOffset(0x12420)] public char* AudioClientRpcTag;
+-
+-    [FieldOffset(0x12428)] public UIModule* UIModulePtr;
+-    [FieldOffset(0x12430)] public RaptureLogModule* RaptureLogModulePtr;
+-    [FieldOffset(0x12438)] public AgentModule AgentModule;
+-    [FieldOffset(0x13450)] public RaptureHotbarModule* RaptureHotbarModulePtr;
+-
+-    [FieldOffset(0x13460)] public RaptureAtkUnitManager RaptureAtkUnitManager;
+-    [FieldOffset(0x1D190)] public RaptureAtkColorDataManager RaptureAtkColorDataManager;
+-
+-    [FieldOffset(0x1D410)] public int NameplateInfoCount;
+-    [FieldOffset(0x1D418), FixedSizeArray] internal FixedSizeArray50<NamePlateInfo> _namePlateInfoEntries;
+-
+-    [FieldOffset(0x24890), FixedSizeArray] internal FixedSizeArray18<CrystalCache> _crystalItemCache;
+-    [FieldOffset(0x25340)] public ItemCache* KeyItemCache; // ptr to 120 entries
+-    [FieldOffset(0x25348)] public ItemCache* EquippedItemCache; // ptr to 14 entries
+-    [FieldOffset(0x25350), FixedSizeArray] internal FixedSizeArray160<ItemCache> _inventoryItemCache; // only 140 slots are processed, unused?
+-    [FieldOffset(0x2A850)] public uint InventoryItemCacheSlotCount;
+-    [FieldOffset(0x2A854)] public uint GilCap;
+-
+-    [FieldOffset(0x2A8B8)] public uint LocalPlayerClassJobId;
+-    [FieldOffset(0x2A8BC)] public uint LocalPlayerLevel;
+-
+-    [FieldOffset(0x2A8C5)] public bool QuickGatheringEnabled;
+-
+-    [FieldOffset(0x2A8CB)] public bool QTEActive;
+-
+-    [FieldOffset(0x2A930)] internal ExcelSheet* AddonParamSheet;
+-    [FieldOffset(0x2A938)] public AtkTexture CharaViewDefaultBackgroundTexture; // "ui/common/CharacterBg.tex" (or _hr1 variant)
+-    [FieldOffset(0x2A950)] public CreditMode CreditMode;
+-    [FieldOffset(0x2A954)] public uint LoginSummonCompanionId;
+-    [FieldOffset(0x2A958)] public float LoginSummonCompanionCountdown;
++    // CN keeps the regional 0x10 layout delta while inheriting the 7.55 field shifts.
++    [FieldOffset(0x8310 - 0x10)] public GameUIScene UIScene;
++    [FieldOffset(0x8312 - 0x10)] public GameUIMode UIMode;
++
++    [FieldOffset(0x83C0 - 0x10)] internal Utf8String Unk8358;
++    [FieldOffset(0x8428 - 0x10), FixedSizeArray] internal FixedSizeArray6<Utf8String> _unkArray;
++    [FieldOffset(0x8698 - 0x10)] public Utf8String ItalicOn; // <italic(1)>
++    [FieldOffset(0x8700 - 0x10)] public Utf8String ItalicOff; // <italic(0)>
++    [FieldOffset(0x8768 - 0x10)] public Utf8String BoldOn; // <bold(1)>
++    [FieldOffset(0x87D0 - 0x10)] public Utf8String BoldOff; // <bold(0)>
++
++    [FieldOffset(0x887F - 0x10)] public AgentUpdateFlags AgentUpdateFlag; // reset happens in RaptureAtkModule_OnUpdate
++    // CN September patch adds one 0x28-byte factory; later embedded managers align to 0x10.
++    [FieldOffset(0x8880 - 0x10), FixedSizeArray] internal FixedSizeArray991<AddonFactoryInfo> _addonFactories;
++    [FieldOffset(0x12348)] public StdVector<Utf8String> AddonNames;
++    [FieldOffset(0x12360)] public AddonConfig* AddonConfigPtr;
++
++    [FieldOffset(0x1236A)] public AtkCursor.CursorType CursorType;
++
++    // [FieldOffset(0x12370)] public ProhibitModule ProhibitModule;
++    [FieldOffset(0x12408)] public int AudioClientRpcTagSize;
++
++    [FieldOffset(0x12410)] public char* AudioClientRpcTag;
++    [FieldOffset(0x12418)] public UIModule* UIModulePtr;
++    [FieldOffset(0x12420)] public RaptureLogModule* RaptureLogModulePtr;
++    [FieldOffset(0x12428)] public AgentModule AgentModule;
++    [FieldOffset(0x13440)] public RaptureHotbarModule* RaptureHotbarModulePtr;
++    [FieldOffset(0x13450)] public RaptureAtkUnitManager RaptureAtkUnitManager;
++    [FieldOffset(0x1D180)] public RaptureAtkColorDataManager RaptureAtkColorDataManager;
++
++    [FieldOffset(0x1D400)] public int NameplateInfoCount;
++    [FieldOffset(0x1D408), FixedSizeArray] internal FixedSizeArray50<NamePlateInfo> _namePlateInfoEntries;
++
++    [FieldOffset(0x24880), FixedSizeArray] internal FixedSizeArray18<CrystalCache> _crystalItemCache;
++    [FieldOffset(0x25330)] public ItemCache* KeyItemCache; // ptr to 120 entries
++    [FieldOffset(0x25338)] public ItemCache* EquippedItemCache; // ptr to 14 entries
++    [FieldOffset(0x25340), FixedSizeArray] internal FixedSizeArray160<ItemCache> _inventoryItemCache; // only 140 slots are processed, unused?
++    [FieldOffset(0x2A840)] public uint InventoryItemCacheSlotCount;
++    [FieldOffset(0x2A844)] public uint GilCap;
++
++    [FieldOffset(0x2A8A8)] public uint LocalPlayerClassJobId;
++    [FieldOffset(0x2A8AC)] public uint LocalPlayerLevel;
++
++    [FieldOffset(0x2A8B5)] public bool QuickGatheringEnabled;
++
++    [FieldOffset(0x2A8BB)] public bool QTEActive;
++
++    [FieldOffset(0x2A920)] internal ExcelSheet* AddonParamSheet;
++    [FieldOffset(0x2A928)] public AtkTexture CharaViewDefaultBackgroundTexture; // "ui/common/CharacterBg.tex" (or _hr1 variant)
++    [FieldOffset(0x2A940)] public CreditMode CreditMode;
++    [FieldOffset(0x2A944)] public uint LoginSummonCompanionId;
++    [FieldOffset(0x2A948)] public float LoginSummonCompanionCountdown;
+     /// <remarks> Only for Region 5 </remarks>
+-    [FieldOffset(0x2A95C)] public float HourTimer;
++    [FieldOffset(0x2A94C)] public float HourTimer;
+     /// <remarks> Only for Region 5 </remarks>
+-    [FieldOffset(0x2A960)] public int HoursPlayed;
++    [FieldOffset(0x2A950)] public int HoursPlayed;
+ 
+-    [FieldOffset(0x2A978)] internal nint ShellCommands; // only 1 function to open links?
++    [FieldOffset(0x2A968)] internal nint ShellCommands; // only 1 function to open links?
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? 49 89 9E ?? ?? ?? ?? 49 89 5E")]
+     public partial bool ChangeUIScene(GameUIScene scene);
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/UIModule.cs b/FFXIVClientStructs/FFXIV/Client/UI/UIModule.cs
+index 6f8d8491..d7b08591 100644
+--- a/FFXIVClientStructs/FFXIV/Client/UI/UIModule.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/UIModule.cs
+@@ -104,23 +104,24 @@ public unsafe partial struct UIModule {
+     [FieldOffset(0xB9B50)] internal RaptureShellModule RaptureShellModule;
+     [FieldOffset(0xBADA0)] internal PronounModule PronounModule;
+ 
++    // CN September offsets verified against UIModule virtual getters and embedded module layout.
+     [FieldOffset(0xBB150)] internal UI3DModule UI3DModule;
+     [FieldOffset(0xD2690)] internal RaptureAtkModule RaptureAtkModule;
+-    [FieldOffset(0xFD010)] internal InfoModule InfoModule;
+-    [FieldOffset(0xFEC88)] internal UIModuleHelpers UIModuleHelpers;
+-    [FieldOffset(0xFECD8)] public Utf8String AddonSheetName;
++    [FieldOffset(0xFD000)] internal InfoModule InfoModule;
++    [FieldOffset(0xFEC78)] internal UIModuleHelpers UIModuleHelpers;
++    [FieldOffset(0xFECC8)] public Utf8String AddonSheetName;
+ 
+-    [FieldOffset(0xFED48)] public Utf8String UIColorSheetName;
++    [FieldOffset(0xFED38)] public Utf8String UIColorSheetName;
+ 
+-    [FieldOffset(0xFEDC0)] public Utf8String CompletionSheetName;
+-    [FieldOffset(0xFEE28)] public Utf8String CompletionOpenIconMacro;
+-    [FieldOffset(0xFEE90)] public Utf8String CompletionCloseIconMacro;
+-    [FieldOffset(0xFEEF8)] public Utf8String NewLineMacro;
+-    [FieldOffset(0xFEF60)] public Utf8String LastTalkName;
+-    [FieldOffset(0xFEFC8)] public Utf8String LastTalkText;
+-    [FieldOffset(0xFF030)] internal UIInputData UIInputData;
+-    [FieldOffset(0xFFA60)] internal UIInputModule UIInputModule;
+-    // [FieldOffset(0xF7BA8)] public Vf79Struct;
++    [FieldOffset(0xFEDB0)] public Utf8String CompletionSheetName;
++    [FieldOffset(0xFEE18)] public Utf8String CompletionOpenIconMacro;
++    [FieldOffset(0xFEE80)] public Utf8String CompletionCloseIconMacro;
++    [FieldOffset(0xFEEE8)] public Utf8String NewLineMacro;
++    [FieldOffset(0xFEF50)] public Utf8String LastTalkName;
++    [FieldOffset(0xFEFB8)] public Utf8String LastTalkText;
++    [FieldOffset(0xFF020)] internal UIInputData UIInputData;
++    [FieldOffset(0xFFA50)] internal UIInputModule UIInputModule;
++    // [FieldOffset(0xF7B08 - 0x10)] public Vf79Struct;
+ 
+     [MemberFunction("48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC 20 48 8B F2 48 8B F9 45 84 C9")]
+     public partial void ProcessChatBoxEntry(Utf8String* message, nint a4 = 0, bool saveToHistory = false);
+diff --git a/FFXIVClientStructs/FFXIV/Common/Component/Excel/ExcelSheet.cs b/FFXIVClientStructs/FFXIV/Common/Component/Excel/ExcelSheet.cs
+index 23c4dee1..82109b40 100644
+--- a/FFXIVClientStructs/FFXIV/Common/Component/Excel/ExcelSheet.cs
++++ b/FFXIVClientStructs/FFXIV/Common/Component/Excel/ExcelSheet.cs
+@@ -47,7 +47,7 @@ public unsafe partial struct ExcelSheet {
+     [MemberFunction("E8 ?? ?? ?? ?? 8B D3 48 8B F8")]
+     public partial IExcelRowWrapper* GetRowById(uint rowId, uint* outErrorCode = null);
+ 
+-    [MemberFunction("E9 ?? ?? ?? ?? 13 6D")]
++    [MemberFunction("48 89 5C 24 08 48 89 6C 24 18 56 57 41 56 48 83 EC 20 33 F6 C7 44 24 48 03 00 00 00")]
+     public partial bool AddWaiter(ExcelSheetWaiter* waiter);
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? 8B 53 ?? 44 8B C5")]
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkModule.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkModule.cs
+index 223040b6..c3a0e015 100644
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkModule.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkModule.cs
+@@ -38,25 +38,26 @@ public unsafe partial struct AtkModule {
+     [FieldOffset(0x72B8)] public StdMap<uint, AddonCallbackEntry> AddonCallbackMapping; // Key is UnitBase->Id
+     [FieldOffset(0x72C8)] public AtkMessageBoxManager* AtkMessageBoxManager;
+     [FieldOffset(0x72D0)] public TextService TextService;
+-    [FieldOffset(0x7300)] public AtkTextInput TextInput;
+-    [FieldOffset(0x7FF0)] internal Utf8String Unk7FE8;
+-    [FieldOffset(0x8058)] internal Utf8String Unk8050;
+-    [FieldOffset(0x80C0)] internal Utf8String Unk80B8;
+-    [FieldOffset(0x8128)] internal Utf8String Unk8120;
++    // CN keeps the regional 0x10 layout delta while inheriting the 7.55 field shifts.
++    [FieldOffset(0x7300 - 0x10)] public AtkTextInput TextInput;
++    [FieldOffset(0x7FF0 - 0x10)] internal Utf8String Unk7FE8;
++    [FieldOffset(0x8058 - 0x10)] internal Utf8String Unk8050;
++    [FieldOffset(0x80C0 - 0x10)] internal Utf8String Unk80B8;
++    [FieldOffset(0x8128 - 0x10)] internal Utf8String Unk8120;
+ 
+     // probably an #IFDEF WINDOWS here or something specifically creating a Steam keyboard.
+     // hope they don't add more soft keyboards later!
+-    [FieldOffset(0x8198)] public SteamGamepadSoftKeyboard SoftKeyboardDevice;
++    [FieldOffset(0x8198 - 0x10)] public SteamGamepadSoftKeyboard SoftKeyboardDevice;
+ 
+-    [FieldOffset(0x82B0), FixedSizeArray(isString: true)] internal FixedSizeArray16<byte> _currentUIScene;
+-    [FieldOffset(0x82C0), FixedSizeArray(isString: true)] internal FixedSizeArray16<byte> _loadingUIScene;
++    [FieldOffset(0x82B0 - 0x10), FixedSizeArray(isString: true)] internal FixedSizeArray16<byte> _currentUIScene;
++    [FieldOffset(0x82C0 - 0x10), FixedSizeArray(isString: true)] internal FixedSizeArray16<byte> _loadingUIScene;
+ 
+-    [FieldOffset(0x82D8)] internal ushort ScreenWidth; // maybe UI dimensions?
+-    [FieldOffset(0x82DA)] internal ushort ScreenHeight;
+-    [FieldOffset(0x82DC)] public bool EnableUiDraw;
++    [FieldOffset(0x82D8 - 0x10)] internal ushort ScreenWidth; // maybe UI dimensions?
++    [FieldOffset(0x82DA - 0x10)] internal ushort ScreenHeight;
++    [FieldOffset(0x82DC - 0x10)] public bool EnableUiDraw;
+ 
+-    [FieldOffset(0x82E0)] public bool EnableUiInput;
+-    [FieldOffset(0x82E1)] public bool IsHudInitialized;
++    [FieldOffset(0x82E0 - 0x10)] public bool EnableUiInput;
++    [FieldOffset(0x82E1 - 0x10)] public bool IsHudInitialized;
+ 
+     [VirtualFunction(44)]
+     public partial AddonStatus GetAddonStatus(uint addonId);
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkUnitBase.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkUnitBase.cs
+index 271f7750..9f9ffd84 100644
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkUnitBase.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkUnitBase.cs
+@@ -238,7 +238,7 @@ public unsafe partial struct AtkUnitBase : ICreatable<AtkUnitBase> {
+     /// <param name="arrayType">0 for StringArrayData or 1 for NumberArrayData</param>
+     /// <param name="arrayIndex">The index in AtkArrayDataHolder</param>
+     /// <param name="clean">Resets all values to default, also frees managed strings</param>
+-    [MemberFunction("E8 ?? ?? ?? ?? 45 33 C9 8D 56 01")]
++    [MemberFunction("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 81 EC 90 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 ?? ?? ?? ?? BF 04 00 00 00")]
+     public partial void UnsubscribeAtkArrayData(byte arrayType, byte arrayIndex, bool clean = false);
+ 
+     [MemberFunction("E9 ?? ?? ?? ?? 48 8D 15 ?? ?? ?? ?? 41 B9 ?? ?? ?? ??"), GenerateStringOverloads]

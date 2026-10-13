@@ -1,0 +1,198 @@
+diff --git a/Dalamud/Configuration/Internal/DalamudConfiguration.cs b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+index 93d575667..087da93a2 100644
+--- a/Dalamud/Configuration/Internal/DalamudConfiguration.cs
++++ b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+@@ -393,7 +393,7 @@ internal sealed class DalamudConfiguration : IInternalDisposableService
+     /// <summary>
+     /// Gets or sets a value indicating whether market board data should be uploaded.
+     /// </summary>
+-    public bool IsMbCollect { get; set; } = true;
++    public bool IsMbCollect { get; set; } = false;
+ 
+     /// <summary>
+     /// Gets the ISO 639-1 two-letter code for the language of the effective Dalamud display language.
+diff --git a/Dalamud/Interface/Internal/DalamudInterface.cs b/Dalamud/Interface/Internal/DalamudInterface.cs
+index 45fb82cba..50388d766 100644
+--- a/Dalamud/Interface/Internal/DalamudInterface.cs
++++ b/Dalamud/Interface/Internal/DalamudInterface.cs
+@@ -1179,11 +1179,6 @@ internal class DalamudInterface : IInternalDisposableService
+ 
+                     ImGui.Separator();
+ 
+-                    if (ImGui.MenuItem("Load blacklisted plugins"u8, (byte*)null, pluginManager.LoadBannedPlugins))
+-                    {
+-                        pluginManager.LoadBannedPlugins ^= true;
+-                    }
+-
+                     if (pluginManager.SafeMode && ImGui.MenuItem("Disable Safe Mode"u8))
+                     {
+                         pluginManager.SafeMode = false;
+diff --git a/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs b/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
+index 8971713db..ea37ebdba 100644
+--- a/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
+@@ -21,7 +21,7 @@ public class BranchSwitcherWindow : Window
+     /// <inheritdoc/>
+     public override void Draw()
+     {
+-        ImGui.TextWrapped("Standalone builds do not use an online Dalamud release or branch service."u8);
++        ImGui.TextWrapped("Moonwake builds do not use an online Dalamud release or branch service."u8);
+         ImGui.TextWrapped("Select and build the desired local branch outside the game, then inject that local payload."u8);
+     }
+ }
+diff --git a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+index 3ef28a2f3..9e583193e 100644
+--- a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+@@ -467,7 +467,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         break;
+ 
+                     case State.Links:
+-                        ImGui.TextWrapped("这是个人实验性 Standalone 构建，不使用官方插件库，也不提供面向第三方用户的技术支持。"u8);
++                        ImGui.TextWrapped("这是Moonwake 开发预览构建，不使用官方插件库，也不提供面向第三方用户的技术支持。"u8);
+                         ImGui.TextWrapped("使用补丁日研究功能前，请先阅读源码、风险说明并备份独立数据目录。"u8);
+ 
+                         ImGuiHelpers.ScaledDummy(45);
+@@ -490,14 +490,14 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+                         if (CenteredIconButton(FontAwesomeIcon.Globe, "独立注入壳与风险说明"))
+                         {
+-                            Util.OpenLink("https://github.com/endfish/DalamudStandaloneCN#readme");
++                            Util.OpenLink("https://github.com/endfish/Moonwake#readme");
+                         }
+ 
+                         ImGuiHelpers.ScaledDummy(5);
+ 
+                         if (CenteredIconButton(FontAwesomeIcon.FileCode, "Dalamud 核心源码"))
+                         {
+-                            Util.OpenLink("https://github.com/endfish/Dalamud");
++                            Util.OpenLink("https://github.com/endfish/Moonwake");
+                         }
+ 
+                         var buttonHeight = 30 * ImGuiHelpers.GlobalScale;
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+index 24d472fba..3c2c3d525 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+@@ -215,13 +215,13 @@ Please see licenses.txt for more information.
+ 
+ Thanks to the Dalamud, XIVLauncher, XIVLauncherCN and related upstream communities.
+ 
+-This is an unsupported personal Standalone CN source build.
+-Standalone shell: https://github.com/endfish/DalamudStandaloneCN
++Moonwake is an independent CN development build maintained by Endfish.
++Project: https://github.com/endfish/Moonwake
+ 
+ 
+ 
+ Dalamud is licensed under AGPL v3 or later.
+-Standalone fork: https://github.com/endfish/Dalamud
++Source recipe and regional patches: https://github.com/endfish/Moonwake
+ Original upstream: https://github.com/goatcorp/Dalamud
+ ";
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+index 7f511d38f..9120f6689 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+@@ -83,8 +83,8 @@ internal sealed class SettingsTabGeneral : SettingsTab
+         new GapSettingsEntry(5),
+ 
+         new SettingsEntry<bool>(
+-            LazyLoc.Localize("DalamudSettingDoMbCollect", "Anonymously upload market board data"),
+-            LazyLoc.Localize("DalamudSettingDoMbCollectHint", "Anonymously provide data about in-game economics to Universalis when browsing the market board. This data can't be tied to you in any way and everyone benefits!"),
++            LazyLoc.Localize("MoonwakeUploadMarketData", "Upload market board data to Universalis (optional)"),
++            LazyLoc.Localize("MoonwakeUploadMarketDataHint", "Disabled by default. Enabling this sends market listings, sales and an uploader identifier derived from your character ContentId to Universalis."),
+             c => c.IsMbCollect,
+             (v, c) => c.IsMbCollect = v),
+     ];
+diff --git a/Dalamud/Plugin/Internal/PluginManager.cs b/Dalamud/Plugin/Internal/PluginManager.cs
+index 4d4897087..b82656f1e 100644
+--- a/Dalamud/Plugin/Internal/PluginManager.cs
++++ b/Dalamud/Plugin/Internal/PluginManager.cs
+@@ -56,7 +56,8 @@ internal class PluginManager : IInternalDisposableService
+ 
+     private readonly Lock pluginListLock = new();
+     private readonly DirectoryInfo pluginDirectory;
+-    private readonly BannedPlugin[]? bannedPlugins;
++    // Moonwake does not consume a publisher-controlled blacklist. Compatibility checks remain active.
++    private readonly BannedPlugin[] bannedPlugins = [];
+ 
+     private readonly List<LocalPlugin> installedPluginsList = [];
+     private readonly List<RemotePluginManifest> availablePluginsList = [];
+@@ -95,22 +96,6 @@ internal class PluginManager : IInternalDisposableService
+ 
+         this.SafeMode = EnvironmentConfiguration.DalamudNoPlugins || this.configuration.PluginSafeMode || this.dalamud.StartInfo.NoLoadPlugins;
+ 
+-        try
+-        {
+-            var appdata = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+-            var safeModeFile = Path.Combine(appdata, "XIVLauncher", ".dalamud_safemode");
+-
+-            if (File.Exists(safeModeFile))
+-            {
+-                this.SafeMode = true;
+-                File.Delete(safeModeFile);
+-            }
+-        }
+-        catch (Exception ex)
+-        {
+-            Log.Error(ex, "Couldn't check safe mode file");
+-        }
+-
+         if (this.SafeMode)
+         {
+             this.configuration.PluginSafeMode = false;
+@@ -119,9 +104,6 @@ internal class PluginManager : IInternalDisposableService
+ 
+         this.PluginConfigs = new PluginConfigurations(Path.Combine(Path.GetDirectoryName(this.dalamud.StartInfo.ConfigurationPath) ?? string.Empty, "pluginConfigs"));
+ 
+-        var bannedPluginsJson = File.ReadAllText(Path.Combine(this.dalamud.StartInfo.AssetDirectory!, "UIRes", "bannedplugin.json"));
+-        this.bannedPlugins = JsonConvert.DeserializeObject<BannedPlugin[]>(bannedPluginsJson)
+-            ?? throw new InvalidDataException("Couldn't deserialize banned plugins manifest.");
+         this.openInstallerWindowPluginChangelogsLink =
+             Service<ChatGui>.GetAsync().ContinueWith(
+                 chatGuiTask => chatGuiTask.Result.AddChatLinkHandler(
+diff --git a/Dalamud/Support/BugBait.cs b/Dalamud/Support/BugBait.cs
+index cc4f50cb8..eace238ea 100644
+--- a/Dalamud/Support/BugBait.cs
++++ b/Dalamud/Support/BugBait.cs
+@@ -20,5 +20,5 @@ internal static class BugBait
+     /// <param name="includeException">Whether the most recent exception to occur should be included in the report.</param>
+     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+     public static Task SendFeedback(RemotePluginManifest plugin, bool isTesting, string content, string reporter, bool includeException) =>
+-        Task.FromException(new NotSupportedException("Standalone builds do not provide an official feedback service."));
++        Task.FromException(new NotSupportedException("Moonwake builds do not provide an official feedback service."));
+ }
+diff --git a/Dalamud/Support/DalamudReleases.cs b/Dalamud/Support/DalamudReleases.cs
+index c33e2744a..b94f172bc 100644
+--- a/Dalamud/Support/DalamudReleases.cs
++++ b/Dalamud/Support/DalamudReleases.cs
+@@ -1,4 +1,4 @@
+-﻿using System;
++using System;
+ using System.Diagnostics.CodeAnalysis;
+ using System.Threading.Tasks;
+ 
+@@ -29,7 +29,7 @@ internal class DalamudReleases : IServiceType
+     public Task<DalamudVersionInfo?> GetVersionForCurrentTrack() =>
+         Task.FromResult<DalamudVersionInfo?>(new DalamudVersionInfo
+         {
+-            Track = Versioning.GetActiveTrack() ?? "standalone-cn",
++            Track = Versioning.GetActiveTrack() ?? "moonwake",
+             AssemblyVersion = Versioning.GetScmVersion(),
+             RuntimeVersion = Environment.Version.ToString(),
+             RuntimeRequired = true,
+diff --git a/DalamudCrashHandler/DalamudCrashHandler.cpp b/DalamudCrashHandler/DalamudCrashHandler.cpp
+index 74aea5258..470bc81c1 100644
+--- a/DalamudCrashHandler/DalamudCrashHandler.cpp
++++ b/DalamudCrashHandler/DalamudCrashHandler.cpp
+@@ -2225,7 +2225,7 @@ int main() {
+                 {
+                     const auto link = std::wstring_view(reinterpret_cast<const wchar_t*>(lParam));
+                     if (link == L"help") {
+-                        ShellExecuteW(hwnd, nullptr, L"https://github.com/endfish/DalamudStandaloneCN#readme", nullptr, nullptr, SW_SHOW);
++                        ShellExecuteW(hwnd, nullptr, L"https://github.com/endfish/Moonwake#readme", nullptr, nullptr, SW_SHOW);
+                     } else if (link == L"logdir") {
+                         open_folder_and_select_items(hwnd, logPath.wstring());
+                     } else if (link == L"logfile") {

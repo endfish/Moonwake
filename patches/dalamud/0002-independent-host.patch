@@ -1,0 +1,2626 @@
+diff --git a/Dalamud.Boot/DalamudStartInfo.cpp b/Dalamud.Boot/DalamudStartInfo.cpp
+index 9c8fd9721..2e769e0c3 100644
+--- a/Dalamud.Boot/DalamudStartInfo.cpp
++++ b/Dalamud.Boot/DalamudStartInfo.cpp
+@@ -108,6 +108,7 @@ void from_json(const nlohmann::json& json, DalamudStartInfo& config) {
+     config.LogName = json.value("LogName", config.LogName);
+     config.PluginDirectory = json.value("PluginDirectory", config.PluginDirectory);
+     config.AssetDirectory = json.value("AssetDirectory", config.AssetDirectory);
++    config.RuntimeDirectory = json.value("RuntimeDirectory", config.RuntimeDirectory);
+ 
+     if (json.contains("TempDirectory") && !json["TempDirectory"].is_null()) {
+         config.TempDirectory = json.value("TempDirectory", config.TempDirectory);
+diff --git a/Dalamud.Boot/DalamudStartInfo.h b/Dalamud.Boot/DalamudStartInfo.h
+index 308dcab7d..ae3520cec 100644
+--- a/Dalamud.Boot/DalamudStartInfo.h
++++ b/Dalamud.Boot/DalamudStartInfo.h
+@@ -47,6 +47,7 @@ struct DalamudStartInfo {
+     std::string TempDirectory;
+     std::string PluginDirectory;
+     std::string AssetDirectory;
++    std::string RuntimeDirectory;
+     ClientLanguage Language = ClientLanguage::English;
+     std::string Platform;
+     std::string GameVersion;
+diff --git a/Dalamud.Boot/dllmain.cpp b/Dalamud.Boot/dllmain.cpp
+index 8ae7a7330..e80e7a3ac 100644
+--- a/Dalamud.Boot/dllmain.cpp
++++ b/Dalamud.Boot/dllmain.cpp
+@@ -310,6 +310,15 @@ HRESULT WINAPI InitializeImpl(LPVOID lpParam, HANDLE hMainThreadContinue) {
+     const auto runtimeconfig_path = std::filesystem::path(*fs_module_path).replace_filename(L"Dalamud.runtimeconfig.json").wstring();
+     const auto module_path = std::filesystem::path(*fs_module_path).replace_filename(L"Dalamud.dll").wstring();
+ 
++    if (!g_startInfo.RuntimeDirectory.empty()) {
++        const auto runtime_directory = unicode::convert<std::wstring>(g_startInfo.RuntimeDirectory);
++        if (!SetEnvironmentVariableW(L"DALAMUD_RUNTIME", runtime_directory.c_str())) {
++            const auto error = GetLastError();
++            logging::E("Failed to set standalone runtime directory (err={})", error);
++            return HRESULT_FROM_WIN32(error);
++        }
++    }
++
+     // ============================== CLR ========================================= //
+ 
+     logging::I("Calling InitializeClrAndGetEntryPoint");
+diff --git a/Dalamud.Common/DalamudStartInfo.cs b/Dalamud.Common/DalamudStartInfo.cs
+index 498b8a4ba..c58a44e17 100644
+--- a/Dalamud.Common/DalamudStartInfo.cs
++++ b/Dalamud.Common/DalamudStartInfo.cs
+@@ -60,10 +60,15 @@ public record DalamudStartInfo
+     /// </summary>
+     public string? AssetDirectory { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets the path to the standalone .NET runtime.
++    /// </summary>
++    public string? RuntimeDirectory { get; set; }
++
+     /// <summary>
+     /// Gets or sets the language of the game client.
+     /// </summary>
+-    public ClientLanguage Language { get; set; } = ClientLanguage.English;
++    public ClientLanguage Language { get; set; } = ClientLanguage.ChineseSimplified;
+ 
+     /// <summary>
+     /// Gets or sets the underlying platform Dalamud runs on.
+@@ -166,4 +171,9 @@ public record DalamudStartInfo
+     /// Gets or sets a value indicating how to deal with unhandled exceptions.
+     /// </summary>
+     public UnhandledExceptionHandlingMode UnhandledException { get; set; }
++
++    /// <summary>
++    /// Gets or sets the launcher directory used for launcher-specific integrations.
++    /// </summary>
++    public string? LauncherDirectory { get; set; }
+ }
+diff --git a/Dalamud.Injector/AppContainerHelper.cs b/Dalamud.Injector/AppContainerHelper.cs
+deleted file mode 100644
+index f4fe6e15c..000000000
+--- a/Dalamud.Injector/AppContainerHelper.cs
++++ /dev/null
+@@ -1,537 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.ComponentModel;
+-using System.Diagnostics.CodeAnalysis;
+-using System.Runtime.InteropServices;
+-
+-using Serilog;
+-
+-// ReSharper disable InconsistentNaming
+-
+-namespace Dalamud.Injector
+-{
+-    /// <summary>
+-    /// Helpers for creating AppContainer profiles, capability SIDs, filesystem grants and loopback exemption.
+-    /// </summary>
+-    internal static class AppContainerHelper
+-    {
+-        // We use specific rights rather than GENERIC_* so that the ACE we write is identical to what we later
+-        // compare against in HasAccess, because the kernel maps specific rights to generic ones
+-
+-        /// <summary>
+-        /// Access mask for read and execute grants.
+-        /// </summary>
+-        public const uint AccessReadExecute = PInvoke.FILE_GENERIC_READ | PInvoke.FILE_GENERIC_EXECUTE;
+-
+-        /// <summary>
+-        /// Access mask for modify grants (read/write/execute/delete).
+-        /// </summary>
+-        public const uint AccessModify = PInvoke.FILE_GENERIC_READ | PInvoke.FILE_GENERIC_WRITE | PInvoke.FILE_GENERIC_EXECUTE | PInvoke.DELETE;
+-
+-        // HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)
+-        private const int HResultAlreadyExists = unchecked((int)0x800700B7);
+-
+-        private static readonly Dictionary<string, uint> WellKnownCapabilityRids = new(StringComparer.OrdinalIgnoreCase)
+-        {
+-            { "internetClient", PInvoke.SECURITY_CAPABILITY_INTERNET_CLIENT },
+-            { "internetClientServer", PInvoke.SECURITY_CAPABILITY_INTERNET_CLIENT_SERVER },
+-            { "privateNetworkClientServer", PInvoke.SECURITY_CAPABILITY_PRIVATE_NETWORK_CLIENT_SERVER },
+-        };
+-
+-        /// <summary>
+-        /// Create or open the AppContainer profile and prepare caps.
+-        /// </summary>
+-        /// <param name="containerName">The internal name of the container.</param>
+-        /// <param name="displayName">The display name of the container.</param>
+-        /// <param name="description">The description of the container.</param>
+-        /// <param name="capabilityNames">
+-        /// Names of capabilities the container should have access to.
+-        /// Well-known ones are mapped to fixed RIDs, others are derived by name instead.
+-        /// </param>
+-        /// <returns>A launch context that can be used to start processes in a containerized manner.</returns>
+-        public static AppContainerLaunchContext CreateContext(string containerName, string displayName, string description, IReadOnlyList<string> capabilityNames)
+-        {
+-            var ctx = new AppContainerLaunchContext();
+-            try
+-            {
+-                var capSids = new List<IntPtr>();
+-                foreach (var name in capabilityNames)
+-                {
+-                    if (WellKnownCapabilityRids.TryGetValue(name, out var rid))
+-                    {
+-                        var authority = new PInvoke.SID_IDENTIFIER_AUTHORITY
+-                        {
+-                            Value = new byte[] { 0, 0, 0, 0, 0, 15 }, // SECURITY_APP_PACKAGE_AUTHORITY
+-                        };
+-
+-                        if (!PInvoke.AllocateAndInitializeSid(
+-                                ref authority,
+-                                2,
+-                                PInvoke.SECURITY_CAPABILITY_BASE_RID,
+-                                rid,
+-                                0,
+-                                0,
+-                                0,
+-                                0,
+-                                0,
+-                                0,
+-                                out var sid))
+-                        {
+-                            throw new Win32Exception(Marshal.GetLastWin32Error());
+-                        }
+-
+-                        ctx.AddOwnedSid(sid, true);
+-                        capSids.Add(sid);
+-                    }
+-                    else
+-                    {
+-                        // Need to derive SIDs for named caps
+-                        if (!PInvoke.DeriveCapabilitySidsFromName(
+-                                name,
+-                                out var groupSids,
+-                                out var groupCount,
+-                                out var sids,
+-                                out var sidCount))
+-                        {
+-                            throw new Win32Exception(Marshal.GetLastWin32Error());
+-                        }
+-
+-                        for (var i = 0; i < groupCount; i++)
+-                            ctx.AddOwnedSid(Marshal.ReadIntPtr(groupSids, i * IntPtr.Size), false);
+-                        PInvoke.LocalFree(groupSids);
+-
+-                        for (var i = 0; i < sidCount; i++)
+-                        {
+-                            var sid = Marshal.ReadIntPtr(sids, i * IntPtr.Size);
+-                            ctx.AddOwnedSid(sid, false);
+-                            capSids.Add(sid);
+-                        }
+-
+-                        PInvoke.LocalFree(sids);
+-                    }
+-                }
+-
+-                ctx.BuildCapabilityArray(capSids);
+-
+-                var hr = PInvoke.CreateAppContainerProfile(
+-                    containerName,
+-                    displayName,
+-                    description,
+-                    ctx.CapabilitiesPtr,
+-                    (uint)ctx.CapabilityCount,
+-                    out var containerSid);
+-
+-                if (hr == HResultAlreadyExists)
+-                {
+-                    Marshal.ThrowExceptionForHR(
+-                        PInvoke.DeriveAppContainerSidFromAppContainerName(containerName, out containerSid));
+-                }
+-                else
+-                {
+-                    Marshal.ThrowExceptionForHR(hr);
+-                }
+-
+-                ctx.SetContainerSid(containerSid);
+-                return ctx;
+-            }
+-            catch
+-            {
+-                ctx.Dispose();
+-                throw;
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Check whether the given SID already has at least the provided access on a path.
+-        /// </summary>
+-        /// <param name="path">Path of an existing file or directory.</param>
+-        /// <param name="sid">The SID to check.</param>
+-        /// <param name="accessMask">The required access mask.</param>
+-        /// <returns>Whether the SID already holds the required access.</returns>
+-        public static bool HasAccess(string path, IntPtr sid, uint accessMask)
+-        {
+-            var err = PInvoke.GetNamedSecurityInfoW(
+-                path,
+-                PInvoke.SE_FILE_OBJECT,
+-                PInvoke.DACL_SECURITY_INFORMATION,
+-                IntPtr.Zero,
+-                IntPtr.Zero,
+-                out var dacl,
+-                IntPtr.Zero,
+-                out var securityDescriptor);
+-            if (err != 0)
+-                return false;
+-
+-            try
+-            {
+-                if (dacl == IntPtr.Zero)
+-                    return false;
+-
+-                var trustee = BuildTrustee(sid);
+-                if (PInvoke.GetEffectiveRightsFromAclW(dacl, ref trustee, out var effective) != 0)
+-                    return false;
+-
+-                return (effective & accessMask) == accessMask;
+-            }
+-            finally
+-            {
+-                if (securityDescriptor != IntPtr.Zero)
+-                    PInvoke.LocalFree(securityDescriptor);
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Ensure the given SID has at least accessMask on a path, writing the DACL when the access
+-        /// is not already present.
+-        /// </summary>
+-        /// <param name="path">Path of an existing file or directory.</param>
+-        /// <param name="sid">The SID to grant to.</param>
+-        /// <param name="accessMask">The required access mask.</param>
+-        /// <returns>What was needed to satisfy the request.</returns>
+-        /// <exception cref="Win32Exception">Thrown when a win32 error other than access denied occurs.</exception>
+-        public static GrantResult EnsureAccess(string path, IntPtr sid, uint accessMask)
+-        {
+-            if (HasAccess(path, sid, accessMask))
+-                return GrantResult.AlreadyGranted;
+-
+-            try
+-            {
+-                GrantAccess(path, sid, accessMask);
+-                return GrantResult.Granted;
+-            }
+-            catch (Win32Exception ex) when (ex.NativeErrorCode == PInvoke.ERROR_ACCESS_DENIED)
+-            {
+-                // Writing a DACL needs WRITE_DAC
+-                return GrantResult.AccessDenied;
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Grant the given SID access to a filesystem path (inheritable to children).
+-        /// </summary>
+-        /// <param name="path">Path of an existing file or directory.</param>
+-        /// <param name="sid">The SID to grant to.</param>
+-        /// <param name="accessMask">The access mask to grant.</param>
+-        /// <exception cref="Win32Exception">Thrown when a win32 error occurs.</exception>
+-        public static void GrantAccess(string path, IntPtr sid, uint accessMask)
+-        {
+-            var err = PInvoke.GetNamedSecurityInfoW(
+-                path,
+-                PInvoke.SE_FILE_OBJECT,
+-                PInvoke.DACL_SECURITY_INFORMATION,
+-                IntPtr.Zero,
+-                IntPtr.Zero,
+-                out var oldDacl,
+-                IntPtr.Zero,
+-                out var securityDescriptor);
+-            if (err != 0)
+-                throw new Win32Exception((int)err, $"GetNamedSecurityInfo failed for {path}");
+-
+-            var newDacl = IntPtr.Zero;
+-            try
+-            {
+-                var ea = new PInvoke.EXPLICIT_ACCESS_W
+-                {
+-                    grfAccessPermissions = accessMask,
+-                    grfAccessMode = PInvoke.GRANT_ACCESS,
+-                    grfInheritance = PInvoke.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+-                    Trustee = BuildTrustee(sid),
+-                };
+-
+-                err = PInvoke.SetEntriesInAclW(1, ref ea, oldDacl, out newDacl);
+-                if (err != 0)
+-                    throw new Win32Exception((int)err, $"SetEntriesInAcl failed for {path}");
+-
+-                err = PInvoke.SetNamedSecurityInfoW(
+-                    path,
+-                    PInvoke.SE_FILE_OBJECT,
+-                    PInvoke.DACL_SECURITY_INFORMATION,
+-                    IntPtr.Zero,
+-                    IntPtr.Zero,
+-                    newDacl,
+-                    IntPtr.Zero);
+-                if (err != 0)
+-                    throw new Win32Exception((int)err, $"SetNamedSecurityInfo failed for {path}");
+-            }
+-            finally
+-            {
+-                if (newDacl != IntPtr.Zero)
+-                    PInvoke.LocalFree(newDacl);
+-                if (securityDescriptor != IntPtr.Zero)
+-                    PInvoke.LocalFree(securityDescriptor);
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Try to add the container SID to the network isolation loopback exemption list.
+-        /// Requires elevation and returns false/logs when not possible.
+-        /// </summary>
+-        /// <param name="ctx">The launch context.</param>
+-        /// <returns>Whether the exemption is in place.</returns>
+-        public static bool TryAddLoopbackExemption(AppContainerLaunchContext ctx)
+-        {
+-            try
+-            {
+-                var err = PInvoke.NetworkIsolationGetAppContainerConfig(out var count, out var existing);
+-                if (err != 0)
+-                {
+-                    Log.Warning("NetworkIsolationGetAppContainerConfig failed: {Err}", err);
+-                    return false;
+-                }
+-
+-                var entrySize = Marshal.SizeOf<PInvoke.SID_AND_ATTRIBUTES>();
+-                for (var i = 0; i < count; i++)
+-                {
+-                    var entry = Marshal.PtrToStructure<PInvoke.SID_AND_ATTRIBUTES>(existing + (i * entrySize));
+-                    if (entry.Sid != IntPtr.Zero && PInvoke.EqualSid(entry.Sid, ctx.ContainerSid))
+-                    {
+-                        Log.Verbose("Loopback exemption already present for {Sid}", ctx.ContainerSidString);
+-                        return true;
+-                    }
+-                }
+-
+-                // Set() replaces the whole list so we need to append instead
+-                var newList = Marshal.AllocHGlobal(entrySize * (int)(count + 1));
+-                try
+-                {
+-                    for (var i = 0; i < count; i++)
+-                    {
+-                        var entry = Marshal.PtrToStructure<PInvoke.SID_AND_ATTRIBUTES>(existing + (i * entrySize));
+-                        Marshal.StructureToPtr(entry, newList + (i * entrySize), false);
+-                    }
+-
+-                    Marshal.StructureToPtr(
+-                        new PInvoke.SID_AND_ATTRIBUTES { Sid = ctx.ContainerSid, Attributes = 0 },
+-                        newList + ((int)count * entrySize),
+-                        false);
+-
+-                    err = PInvoke.NetworkIsolationSetAppContainerConfig(count + 1, newList);
+-                    if (err != 0)
+-                    {
+-                        Log.Warning(
+-                            "Could not add loopback exemption (error {Err}). " +
+-                            "Make sure you are running this elevated or run this once from an elevated prompt instead: CheckNetIsolation.exe LoopbackExempt -a -p={Sid}",
+-                            err,
+-                            ctx.ContainerSidString);
+-                        return false;
+-                    }
+-
+-                    Log.Information("Loopback exemption added for {Sid}", ctx.ContainerSidString);
+-                    return true;
+-                }
+-                finally
+-                {
+-                    Marshal.FreeHGlobal(newList);
+-
+-                    // TODO: Free existing?
+-                }
+-            }
+-            catch (Exception ex)
+-            {
+-                Log.Warning(ex, "Failed to configure loopback exemption");
+-                return false;
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Whether the current process is running elevated.
+-        /// </summary>
+-        /// <returns>True if running with an elevated token.</returns>
+-        public static bool IsElevated()
+-        {
+-            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+-            return new System.Security.Principal.WindowsPrincipal(identity)
+-                .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+-        }
+-
+-        /// <summary>
+-        /// Convert a SID to its string form.
+-        /// </summary>
+-        /// <param name="sid">The SID.</param>
+-        /// <returns>The SID in string form.</returns>
+-        internal static string SidToString(IntPtr sid)
+-        {
+-            if (!PInvoke.ConvertSidToStringSidW(sid, out var strPtr))
+-                throw new Win32Exception(Marshal.GetLastWin32Error());
+-
+-            try
+-            {
+-                return Marshal.PtrToStringUni(strPtr) ?? string.Empty;
+-            }
+-            finally
+-            {
+-                PInvoke.LocalFree(strPtr);
+-            }
+-        }
+-
+-        private static PInvoke.TRUSTEE_W BuildTrustee(IntPtr sid) => new()
+-        {
+-            pMultipleTrustee = IntPtr.Zero,
+-            MultipleTrusteeOperation = 0, // NO_MULTIPLE_TRUSTEE
+-            TrusteeForm = PInvoke.TRUSTEE_IS_SID,
+-            TrusteeType = PInvoke.TRUSTEE_IS_WELL_KNOWN_GROUP,
+-            ptstrName = sid,
+-        };
+-
+-        [SuppressMessage("StyleCop.CSharp.NamingRules", "SA1307:Accessible fields should begin with upper-case letter", Justification = "WINAPI conventions")]
+-        [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1121:Use built-in type alias", Justification = "WINAPI conventions")]
+-        [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1401:Fields should be private", Justification = "WINAPI conventions")]
+-        [SuppressMessage("StyleCop.CSharp.NamingRules", "SA1306:Field names should begin with lower-case letter", Justification = "WINAPI conventions")]
+-        [SuppressMessage("StyleCop.CSharp.NamingRules", "SA1310:Field names should not contain underscore", Justification = "WINAPI conventions")]
+-        [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1600:Elements should be documented", Justification = "WINAPI conventions")]
+-        internal static class PInvoke
+-        {
+-            public const uint DELETE = 0x00010000;
+-
+-            public const uint FILE_GENERIC_READ = 0x00120089;
+-            public const uint FILE_GENERIC_WRITE = 0x00120116;
+-            public const uint FILE_GENERIC_EXECUTE = 0x001200A0;
+-
+-            public const int ERROR_ACCESS_DENIED = 5;
+-
+-            public const uint SE_GROUP_ENABLED = 0x00000004;
+-
+-            public const uint SECURITY_CAPABILITY_BASE_RID = 3;
+-            public const uint SECURITY_CAPABILITY_INTERNET_CLIENT = 1;
+-            public const uint SECURITY_CAPABILITY_INTERNET_CLIENT_SERVER = 2;
+-            public const uint SECURITY_CAPABILITY_PRIVATE_NETWORK_CLIENT_SERVER = 3;
+-
+-            public const int SE_FILE_OBJECT = 1;
+-            public const uint DACL_SECURITY_INFORMATION = 4;
+-
+-            public const int GRANT_ACCESS = 1;
+-            public const uint SUB_CONTAINERS_AND_OBJECTS_INHERIT = 0x3;
+-            public const int TRUSTEE_IS_SID = 0;
+-            public const int TRUSTEE_IS_WELL_KNOWN_GROUP = 5;
+-
+-            [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+-            public static extern int CreateAppContainerProfile(
+-                string pszAppContainerName,
+-                string pszDisplayName,
+-                string pszDescription,
+-                IntPtr pCapabilities,
+-                uint dwCapabilityCount,
+-                out IntPtr ppSidAppContainerSid);
+-
+-            [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+-            public static extern int DeriveAppContainerSidFromAppContainerName(
+-                string pszAppContainerName,
+-                out IntPtr ppsidAppContainerSid);
+-
+-            [DllImport("kernelbase.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+-            [return: MarshalAs(UnmanagedType.Bool)]
+-            public static extern bool DeriveCapabilitySidsFromName(
+-                string capName,
+-                out IntPtr capabilityGroupSids,
+-                out uint capabilityGroupSidCount,
+-                out IntPtr capabilitySids,
+-                out uint capabilitySidCount);
+-
+-            [DllImport("advapi32.dll", SetLastError = true)]
+-            [return: MarshalAs(UnmanagedType.Bool)]
+-            public static extern bool AllocateAndInitializeSid(
+-                ref SID_IDENTIFIER_AUTHORITY pIdentifierAuthority,
+-                byte nSubAuthorityCount,
+-                uint nSubAuthority0,
+-                uint nSubAuthority1,
+-                uint nSubAuthority2,
+-                uint nSubAuthority3,
+-                uint nSubAuthority4,
+-                uint nSubAuthority5,
+-                uint nSubAuthority6,
+-                uint nSubAuthority7,
+-                out IntPtr pSid);
+-
+-            [DllImport("advapi32.dll")]
+-            public static extern IntPtr FreeSid(IntPtr pSid);
+-
+-            [DllImport("advapi32.dll")]
+-            [return: MarshalAs(UnmanagedType.Bool)]
+-            public static extern bool EqualSid(IntPtr pSid1, IntPtr pSid2);
+-
+-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+-            [return: MarshalAs(UnmanagedType.Bool)]
+-            public static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr stringSid);
+-
+-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+-            public static extern uint GetNamedSecurityInfoW(
+-                string pObjectName,
+-                int objectType,
+-                uint securityInfo,
+-                IntPtr ppsidOwner,
+-                IntPtr ppsidGroup,
+-                out IntPtr ppDacl,
+-                IntPtr ppSacl,
+-                out IntPtr ppSecurityDescriptor);
+-
+-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+-            public static extern uint GetEffectiveRightsFromAclW(
+-                IntPtr pAcl,
+-                ref TRUSTEE_W pTrustee,
+-                out uint pAccessRights);
+-
+-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+-            public static extern uint SetEntriesInAclW(
+-                uint cCountOfExplicitEntries,
+-                ref EXPLICIT_ACCESS_W pListOfExplicitEntries,
+-                IntPtr oldAcl,
+-                out IntPtr newAcl);
+-
+-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+-            public static extern uint SetNamedSecurityInfoW(
+-                string pObjectName,
+-                int objectType,
+-                uint securityInfo,
+-                IntPtr psidOwner,
+-                IntPtr psidGroup,
+-                IntPtr pDacl,
+-                IntPtr pSacl);
+-
+-            [DllImport("firewallapi.dll")]
+-            public static extern uint NetworkIsolationGetAppContainerConfig(
+-                out uint pdwNumPublicAppCs,
+-                out IntPtr appContainerSids);
+-
+-            [DllImport("firewallapi.dll")]
+-            public static extern uint NetworkIsolationSetAppContainerConfig(
+-                uint dwNumPublicAppCs,
+-                IntPtr appContainerSids);
+-
+-            [DllImport("kernel32.dll")]
+-            public static extern IntPtr LocalFree(IntPtr hMem);
+-
+-            [StructLayout(LayoutKind.Sequential)]
+-            public struct SID_IDENTIFIER_AUTHORITY
+-            {
+-                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
+-                public byte[] Value;
+-            }
+-
+-            [StructLayout(LayoutKind.Sequential)]
+-            public struct SID_AND_ATTRIBUTES
+-            {
+-                public IntPtr Sid;
+-                public uint Attributes;
+-            }
+-
+-            [StructLayout(LayoutKind.Sequential)]
+-            public struct TRUSTEE_W
+-            {
+-                public IntPtr pMultipleTrustee;
+-                public int MultipleTrusteeOperation;
+-                public int TrusteeForm;
+-                public int TrusteeType;
+-                public IntPtr ptstrName;
+-            }
+-
+-            [StructLayout(LayoutKind.Sequential)]
+-            public struct EXPLICIT_ACCESS_W
+-            {
+-                public uint grfAccessPermissions;
+-                public int grfAccessMode;
+-                public uint grfInheritance;
+-                public TRUSTEE_W Trustee;
+-            }
+-        }
+-    }
+-}
+diff --git a/Dalamud.Injector/AppContainerLaunchContext.cs b/Dalamud.Injector/AppContainerLaunchContext.cs
+deleted file mode 100644
+index 3c4d2d2e7..000000000
+--- a/Dalamud.Injector/AppContainerLaunchContext.cs
++++ /dev/null
+@@ -1,109 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Runtime.InteropServices;
+-
+-namespace Dalamud.Injector
+-{
+-    /// <summary>
+-    /// Owns the native resources needed to launch a process inside an AppContainer.
+-    /// Notably, the container SID and the prepared capability array for SECURITY_CAPABILITIES.
+-    /// </summary>
+-    public sealed class AppContainerLaunchContext : IDisposable
+-    {
+-        private readonly List<(IntPtr Ptr, bool IsFreeSid)> ownedSids = new();
+-        private IntPtr capabilitiesPtr = IntPtr.Zero;
+-
+-        /// <summary>
+-        /// Gets a pointer to the AppContainer SID.
+-        /// </summary>
+-        public IntPtr ContainerSid { get; private set; } = IntPtr.Zero;
+-
+-        /// <summary>
+-        /// Gets the string form of the AppContainer SID (S-1-15-2-...).
+-        /// </summary>
+-        public string ContainerSidString { get; private set; } = string.Empty;
+-
+-        /// <summary>
+-        /// Gets a pointer to a native SID_AND_ATTRIBUTES array for SECURITY_CAPABILITIES.
+-        /// </summary>
+-        public IntPtr CapabilitiesPtr => this.capabilitiesPtr;
+-
+-        /// <summary>
+-        /// Gets the number of capability entries.
+-        /// </summary>
+-        public int CapabilityCount { get; private set; }
+-
+-        /// <summary>
+-        /// Gets or sets the directory the child process should use as TEMP/TMP, if any.
+-        /// </summary>
+-        public string? TempDirectoryOverride { get; set; }
+-
+-        /// <summary>
+-        /// Gets or sets the runtime directory to pass to the child as DALAMUD_RUNTIME.
+-        /// Set in sandbox mode so Dalamud.Boot doesn't have to resolve it through the shell APIs.
+-        /// </summary>
+-        public string? RuntimeDirectoryOverride { get; set; }
+-
+-        /// <inheritdoc/>
+-        public void Dispose()
+-        {
+-            if (this.capabilitiesPtr != IntPtr.Zero)
+-            {
+-                Marshal.FreeHGlobal(this.capabilitiesPtr);
+-                this.capabilitiesPtr = IntPtr.Zero;
+-            }
+-
+-            foreach (var (ptr, isFreeSid) in this.ownedSids)
+-            {
+-                if (isFreeSid)
+-                    AppContainerHelper.PInvoke.FreeSid(ptr);
+-                else
+-                    AppContainerHelper.PInvoke.LocalFree(ptr);
+-            }
+-
+-            this.ownedSids.Clear();
+-            this.ContainerSid = IntPtr.Zero;
+-        }
+-
+-        /// <summary>
+-        /// Set the container SID pointer owned by this context.
+-        /// </summary>
+-        /// <param name="sid">The SID, allocated by the profile APIs (freed with FreeSid).</param>
+-        internal void SetContainerSid(IntPtr sid)
+-        {
+-            this.ContainerSid = sid;
+-            this.ownedSids.Add((sid, true));
+-            this.ContainerSidString = AppContainerHelper.SidToString(sid);
+-        }
+-
+-        /// <summary>
+-        /// Take ownership of capability SID.
+-        /// </summary>
+-        /// <param name="sid">The SID.</param>
+-        /// <param name="isFreeSid">Whether it must be freed with FreeSid (true) or LocalFree (false).</param>
+-        internal void AddOwnedSid(IntPtr sid, bool isFreeSid) => this.ownedSids.Add((sid, isFreeSid));
+-
+-        /// <summary>
+-        /// Convert the given capability SIDs into a native SID_AND_ATTRIBUTES array.
+-        /// </summary>
+-        /// <param name="capabilitySids">The capability SIDs, already owned by this context.</param>
+-        internal void BuildCapabilityArray(IReadOnlyList<IntPtr> capabilitySids)
+-        {
+-            this.CapabilityCount = capabilitySids.Count;
+-            if (this.CapabilityCount == 0)
+-                return;
+-
+-            var entrySize = Marshal.SizeOf<AppContainerHelper.PInvoke.SID_AND_ATTRIBUTES>();
+-            this.capabilitiesPtr = Marshal.AllocHGlobal(entrySize * this.CapabilityCount);
+-            for (var i = 0; i < this.CapabilityCount; i++)
+-            {
+-                var entry = new AppContainerHelper.PInvoke.SID_AND_ATTRIBUTES
+-                {
+-                    Sid = capabilitySids[i],
+-                    Attributes = AppContainerHelper.PInvoke.SE_GROUP_ENABLED,
+-                };
+-                Marshal.StructureToPtr(entry, this.capabilitiesPtr + (i * entrySize), false);
+-            }
+-        }
+-    }
+-}
+diff --git a/Dalamud.Injector/GameStart.cs b/Dalamud.Injector/GameStart.cs
+index b77b16ea8..26ed3add0 100644
+--- a/Dalamud.Injector/GameStart.cs
++++ b/Dalamud.Injector/GameStart.cs
+@@ -25,11 +25,10 @@ namespace Dalamud.Injector
+         /// <param name="dontFixAcl">Don't actually fix the ACL.</param>
+         /// <param name="beforeResume">Action to execute before the process is started.</param>
+         /// <param name="waitForGameWindow">Wait for the game window to be ready before proceeding.</param>
+-        /// <param name="appContainer">If set, launch the process inside this AppContainer.</param>
+         /// <returns>The started process.</returns>
+         /// <exception cref="Win32Exception">Thrown when a win32 error occurs.</exception>
+         /// <exception cref="GameStartException">Thrown when the process did not start correctly.</exception>
+-        public static Process LaunchGame(string workingDir, string exePath, string arguments, bool dontFixAcl, Action<Process> beforeResume, bool waitForGameWindow = true, AppContainerLaunchContext? appContainer = null)
++        public static Process LaunchGame(string workingDir, string exePath, string arguments, bool dontFixAcl, Action<Process> beforeResume, bool waitForGameWindow = true)
+         {
+             Process? process = null;
+ 
+@@ -75,6 +74,11 @@ namespace Dalamud.Injector
+                     bInheritHandle = false,
+                 };
+ 
++                var lpStartupInfo = new PInvoke.STARTUPINFO
++                {
++                    cb = Marshal.SizeOf<PInvoke.STARTUPINFO>(),
++                };
++
+                 var compatLayerPrev = Environment.GetEnvironmentVariable("__COMPAT_LAYER");
+ 
+                 if (!string.IsNullOrEmpty(compatLayerPrev) && !compatLayerPrev.Contains("RunAsInvoker"))
+@@ -86,88 +90,9 @@ namespace Dalamud.Injector
+                     Environment.SetEnvironmentVariable("__COMPAT_LAYER", "RunAsInvoker");
+                 }
+ 
+-                // If we have an app container, we override TEMP and TMP because the regular windows temp folder
+-                // is unsafe to grant
+-                var tempPrev = Environment.GetEnvironmentVariable("TEMP");
+-                var tmpPrev = Environment.GetEnvironmentVariable("TMP");
+-                var tempOverride = appContainer?.TempDirectoryOverride;
+-                if (tempOverride != null)
+-                {
+-                    Environment.SetEnvironmentVariable("TEMP", tempOverride);
+-                    Environment.SetEnvironmentVariable("TMP", tempOverride);
+-                }
+-
+-                var runtimePrev = Environment.GetEnvironmentVariable("DALAMUD_RUNTIME");
+-                var runtimeOverride = appContainer?.RuntimeDirectoryOverride;
+-                if (runtimeOverride != null)
+-                    Environment.SetEnvironmentVariable("DALAMUD_RUNTIME", runtimeOverride);
+-
+-                var attributeList = IntPtr.Zero;
+-                var securityCapabilitiesPtr = IntPtr.Zero;
+                 try
+                 {
+-                    bool created;
+-                    if (appContainer != null)
+-                    {
+-                        var attributeListSize = IntPtr.Zero;
+-                        PInvoke.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+-                        attributeList = Marshal.AllocHGlobal(attributeListSize);
+-                        if (!PInvoke.InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+-                        {
+-                            throw new Win32Exception(Marshal.GetLastWin32Error());
+-                        }
+-
+-                        var securityCapabilities = new PInvoke.SECURITY_CAPABILITIES
+-                        {
+-                            AppContainerSid = appContainer.ContainerSid,
+-                            Capabilities = appContainer.CapabilitiesPtr,
+-                            CapabilityCount = (uint)appContainer.CapabilityCount,
+-                            Reserved = 0,
+-                        };
+-                        securityCapabilitiesPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PInvoke.SECURITY_CAPABILITIES>());
+-                        Marshal.StructureToPtr(securityCapabilities, securityCapabilitiesPtr, false);
+-
+-                        if (!PInvoke.UpdateProcThreadAttribute(
+-                                attributeList,
+-                                0,
+-                                (IntPtr)PInvoke.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+-                                securityCapabilitiesPtr,
+-                                (IntPtr)Marshal.SizeOf<PInvoke.SECURITY_CAPABILITIES>(),
+-                                IntPtr.Zero,
+-                                IntPtr.Zero))
+-                        {
+-                            throw new Win32Exception(Marshal.GetLastWin32Error());
+-                        }
+-
+-                        var lpStartupInfoEx = new PInvoke.STARTUPINFOEX
+-                        {
+-                            StartupInfo = new PInvoke.STARTUPINFO
+-                            {
+-                                cb = Marshal.SizeOf<PInvoke.STARTUPINFOEX>(),
+-                            },
+-                            lpAttributeList = attributeList,
+-                        };
+-
+-                        created = PInvoke.CreateProcess(
+-                            null,
+-                            $"\"{exePath}\" {arguments}",
+-                            ref lpProcessAttributes,
+-                            IntPtr.Zero,
+-                            false,
+-                            PInvoke.CREATE_SUSPENDED | PInvoke.EXTENDED_STARTUPINFO_PRESENT,
+-                            IntPtr.Zero,
+-                            workingDir,
+-                            ref lpStartupInfoEx,
+-                            out lpProcessInformation);
+-                    }
+-                    else
+-                    {
+-                        var lpStartupInfo = new PInvoke.STARTUPINFO
+-                        {
+-                            cb = Marshal.SizeOf<PInvoke.STARTUPINFO>(),
+-                        };
+-
+-                        created = PInvoke.CreateProcess(
++                    if (!PInvoke.CreateProcess(
+                             null,
+                             $"\"{exePath}\" {arguments}",
+                             ref lpProcessAttributes,
+@@ -177,10 +102,7 @@ namespace Dalamud.Injector
+                             IntPtr.Zero,
+                             workingDir,
+                             ref lpStartupInfo,
+-                            out lpProcessInformation);
+-                    }
+-
+-                    if (!created)
++                            out lpProcessInformation))
+                     {
+                         throw new Win32Exception(Marshal.GetLastWin32Error());
+                     }
+@@ -188,23 +110,6 @@ namespace Dalamud.Injector
+                 finally
+                 {
+                     Environment.SetEnvironmentVariable("__COMPAT_LAYER", compatLayerPrev);
+-                    if (tempOverride != null)
+-                    {
+-                        Environment.SetEnvironmentVariable("TEMP", tempPrev);
+-                        Environment.SetEnvironmentVariable("TMP", tmpPrev);
+-                    }
+-
+-                    if (runtimeOverride != null)
+-                        Environment.SetEnvironmentVariable("DALAMUD_RUNTIME", runtimePrev);
+-
+-                    if (attributeList != IntPtr.Zero)
+-                    {
+-                        PInvoke.DeleteProcThreadAttributeList(attributeList);
+-                        Marshal.FreeHGlobal(attributeList);
+-                    }
+-
+-                    if (securityCapabilitiesPtr != IntPtr.Zero)
+-                        Marshal.FreeHGlobal(securityCapabilitiesPtr);
+                 }
+ 
+                 if (!dontFixAcl)
+@@ -454,10 +359,6 @@ namespace Dalamud.Injector
+             public const UInt32 SECURITY_DESCRIPTOR_REVISION = 1;
+ 
+             public const UInt32 CREATE_SUSPENDED = 0x00000004;
+-            public const UInt32 EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+-
+-            // ProcThreadAttributeValue(ProcThreadAttributeSecurityCapabilities = 9, FALSE, TRUE, FALSE)
+-            public const UInt32 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
+ 
+             public const UInt32 TOKEN_QUERY = 0x0008;
+             public const UInt32 TOKEN_ADJUST_PRIVILEGES = 0x0020;
+@@ -579,39 +480,6 @@ namespace Dalamud.Injector
+                [In] ref STARTUPINFO lpStartupInfo,
+                out PROCESS_INFORMATION lpProcessInformation);
+ 
+-            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+-            public static extern bool CreateProcess(
+-               string? lpApplicationName,
+-               string? lpCommandLine,
+-               ref SECURITY_ATTRIBUTES lpProcessAttributes,
+-               IntPtr lpThreadAttributes,
+-               bool bInheritHandles,
+-               UInt32 dwCreationFlags,
+-               IntPtr lpEnvironment,
+-               string lpCurrentDirectory,
+-               [In] ref STARTUPINFOEX lpStartupInfo,
+-               out PROCESS_INFORMATION lpProcessInformation);
+-
+-            [DllImport("kernel32.dll", SetLastError = true)]
+-            public static extern bool InitializeProcThreadAttributeList(
+-                IntPtr lpAttributeList,
+-                int dwAttributeCount,
+-                int dwFlags,
+-                ref IntPtr lpSize);
+-
+-            [DllImport("kernel32.dll", SetLastError = true)]
+-            public static extern bool UpdateProcThreadAttribute(
+-                IntPtr lpAttributeList,
+-                uint dwFlags,
+-                IntPtr attribute,
+-                IntPtr lpValue,
+-                IntPtr cbSize,
+-                IntPtr lpPreviousValue,
+-                IntPtr lpReturnSize);
+-
+-            [DllImport("kernel32.dll")]
+-            public static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
+-
+             [DllImport("kernel32.dll", SetLastError = true)]
+             public static extern bool CloseHandle(IntPtr hObject);
+ 
+@@ -759,22 +627,6 @@ namespace Dalamud.Injector
+                 public IntPtr hStdError;
+             }
+ 
+-            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+-            public struct STARTUPINFOEX
+-            {
+-                public STARTUPINFO StartupInfo;
+-                public IntPtr lpAttributeList;
+-            }
+-
+-            [StructLayout(LayoutKind.Sequential)]
+-            public struct SECURITY_CAPABILITIES
+-            {
+-                public IntPtr AppContainerSid;
+-                public IntPtr Capabilities;
+-                public UInt32 CapabilityCount;
+-                public UInt32 Reserved;
+-            }
+-
+             [StructLayout(LayoutKind.Sequential)]
+             public struct PROCESS_INFORMATION
+             {
+diff --git a/Dalamud.Injector/GrantResult.cs b/Dalamud.Injector/GrantResult.cs
+deleted file mode 100644
+index c49eebcaf..000000000
+--- a/Dalamud.Injector/GrantResult.cs
++++ /dev/null
+@@ -1,23 +0,0 @@
+-namespace Dalamud.Injector
+-{
+-    /// <summary>
+-    /// Outcome of ensuring an AppContainer has access to a path.
+-    /// </summary>
+-    public enum GrantResult
+-    {
+-        /// <summary>
+-        /// The container already held the requested access. The DACL wasn't modified.
+-        /// </summary>
+-        AlreadyGranted,
+-
+-        /// <summary>
+-        /// The access was granted by writing the DACL.
+-        /// </summary>
+-        Granted,
+-
+-        /// <summary>
+-        /// The DACL could not be written.
+-        /// </summary>
+-        AccessDenied,
+-    }
+-}
+diff --git a/Dalamud.Injector/LegacyBlowfish.cs b/Dalamud.Injector/LegacyBlowfish.cs
+deleted file mode 100644
+index 99c514954..000000000
+--- a/Dalamud.Injector/LegacyBlowfish.cs
++++ /dev/null
+@@ -1,325 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Diagnostics.CodeAnalysis;
+-
+-namespace Dalamud.Injector
+-{
+-    [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1124:Do not use regions", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.MaintainabilityRules", "SA1413:Use trailing comma in multi-line initializers", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.LayoutRules", "SA1519:Braces should not be omitted from multi-line child statement", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1414:Tuple types in signatures should have element names", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1101:Prefix local calls with this", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1600:Elements should be documented", Justification = "Legacy code")]
+-    [SuppressMessage("StyleCop.CSharp.OrderingRules", "SA1204:Static elements should appear before instance elements", Justification = "Legacy code")]
+-    internal class LegacyBlowfish
+-    {
+-        #region P-Array and S-Boxes
+-
+-        private readonly uint[] p =
+-        {
+-            0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344, 0xa4093822, 0x299f31d0,
+-            0x082efa98, 0xec4e6c89, 0x452821e6, 0x38d01377, 0xbe5466cf, 0x34e90c6c,
+-            0xc0ac29b7, 0xc97c50dd, 0x3f84d5b5, 0xb5470917, 0x9216d5d9, 0x8979fb1b
+-        };
+-
+-        private readonly uint[,] s =
+-        {
+-            {
+-                0xd1310ba6, 0x98dfb5ac, 0x2ffd72db, 0xd01adfb7, 0xb8e1afed, 0x6a267e96,
+-                0xba7c9045, 0xf12c7f99, 0x24a19947, 0xb3916cf7, 0x0801f2e2, 0x858efc16,
+-                0x636920d8, 0x71574e69, 0xa458fea3, 0xf4933d7e, 0x0d95748f, 0x728eb658,
+-                0x718bcd58, 0x82154aee, 0x7b54a41d, 0xc25a59b5, 0x9c30d539, 0x2af26013,
+-                0xc5d1b023, 0x286085f0, 0xca417918, 0xb8db38ef, 0x8e79dcb0, 0x603a180e,
+-                0x6c9e0e8b, 0xb01e8a3e, 0xd71577c1, 0xbd314b27, 0x78af2fda, 0x55605c60,
+-                0xe65525f3, 0xaa55ab94, 0x57489862, 0x63e81440, 0x55ca396a, 0x2aab10b6,
+-                0xb4cc5c34, 0x1141e8ce, 0xa15486af, 0x7c72e993, 0xb3ee1411, 0x636fbc2a,
+-                0x2ba9c55d, 0x741831f6, 0xce5c3e16, 0x9b87931e, 0xafd6ba33, 0x6c24cf5c,
+-                0x7a325381, 0x28958677, 0x3b8f4898, 0x6b4bb9af, 0xc4bfe81b, 0x66282193,
+-                0x61d809cc, 0xfb21a991, 0x487cac60, 0x5dec8032, 0xef845d5d, 0xe98575b1,
+-                0xdc262302, 0xeb651b88, 0x23893e81, 0xd396acc5, 0x0f6d6ff3, 0x83f44239,
+-                0x2e0b4482, 0xa4842004, 0x69c8f04a, 0x9e1f9b5e, 0x21c66842, 0xf6e96c9a,
+-                0x670c9c61, 0xabd388f0, 0x6a51a0d2, 0xd8542f68, 0x960fa728, 0xab5133a3,
+-                0x6eef0b6c, 0x137a3be4, 0xba3bf050, 0x7efb2a98, 0xa1f1651d, 0x39af0176,
+-                0x66ca593e, 0x82430e88, 0x8cee8619, 0x456f9fb4, 0x7d84a5c3, 0x3b8b5ebe,
+-                0xe06f75d8, 0x85c12073, 0x401a449f, 0x56c16aa6, 0x4ed3aa62, 0x363f7706,
+-                0x1bfedf72, 0x429b023d, 0x37d0d724, 0xd00a1248, 0xdb0fead3, 0x49f1c09b,
+-                0x075372c9, 0x80991b7b, 0x25d479d8, 0xf6e8def7, 0xe3fe501a, 0xb6794c3b,
+-                0x976ce0bd, 0x04c006ba, 0xc1a94fb6, 0x409f60c4, 0x5e5c9ec2, 0x196a2463,
+-                0x68fb6faf, 0x3e6c53b5, 0x1339b2eb, 0x3b52ec6f, 0x6dfc511f, 0x9b30952c,
+-                0xcc814544, 0xaf5ebd09, 0xbee3d004, 0xde334afd, 0x660f2807, 0x192e4bb3,
+-                0xc0cba857, 0x45c8740f, 0xd20b5f39, 0xb9d3fbdb, 0x5579c0bd, 0x1a60320a,
+-                0xd6a100c6, 0x402c7279, 0x679f25fe, 0xfb1fa3cc, 0x8ea5e9f8, 0xdb3222f8,
+-                0x3c7516df, 0xfd616b15, 0x2f501ec8, 0xad0552ab, 0x323db5fa, 0xfd238760,
+-                0x53317b48, 0x3e00df82, 0x9e5c57bb, 0xca6f8ca0, 0x1a87562e, 0xdf1769db,
+-                0xd542a8f6, 0x287effc3, 0xac6732c6, 0x8c4f5573, 0x695b27b0, 0xbbca58c8,
+-                0xe1ffa35d, 0xb8f011a0, 0x10fa3d98, 0xfd2183b8, 0x4afcb56c, 0x2dd1d35b,
+-                0x9a53e479, 0xb6f84565, 0xd28e49bc, 0x4bfb9790, 0xe1ddf2da, 0xa4cb7e33,
+-                0x62fb1341, 0xcee4c6e8, 0xef20cada, 0x36774c01, 0xd07e9efe, 0x2bf11fb4,
+-                0x95dbda4d, 0xae909198, 0xeaad8e71, 0x6b93d5a0, 0xd08ed1d0, 0xafc725e0,
+-                0x8e3c5b2f, 0x8e7594b7, 0x8ff6e2fb, 0xf2122b64, 0x8888b812, 0x900df01c,
+-                0x4fad5ea0, 0x688fc31c, 0xd1cff191, 0xb3a8c1ad, 0x2f2f2218, 0xbe0e1777,
+-                0xea752dfe, 0x8b021fa1, 0xe5a0cc0f, 0xb56f74e8, 0x18acf3d6, 0xce89e299,
+-                0xb4a84fe0, 0xfd13e0b7, 0x7cc43b81, 0xd2ada8d9, 0x165fa266, 0x80957705,
+-                0x93cc7314, 0x211a1477, 0xe6ad2065, 0x77b5fa86, 0xc75442f5, 0xfb9d35cf,
+-                0xebcdaf0c, 0x7b3e89a0, 0xd6411bd3, 0xae1e7e49, 0x00250e2d, 0x2071b35e,
+-                0x226800bb, 0x57b8e0af, 0x2464369b, 0xf009b91e, 0x5563911d, 0x59dfa6aa,
+-                0x78c14389, 0xd95a537f, 0x207d5ba2, 0x02e5b9c5, 0x83260376, 0x6295cfa9,
+-                0x11c81968, 0x4e734a41, 0xb3472dca, 0x7b14a94a, 0x1b510052, 0x9a532915,
+-                0xd60f573f, 0xbc9bc6e4, 0x2b60a476, 0x81e67400, 0x08ba6fb5, 0x571be91f,
+-                0xf296ec6b, 0x2a0dd915, 0xb6636521, 0xe7b9f9b6, 0xff34052e, 0xc5855664,
+-                0x53b02d5d, 0xa99f8fa1, 0x08ba4799, 0x6e85076a
+-            },
+-            {
+-                0x4b7a70e9, 0xb5b32944, 0xdb75092e, 0xc4192623, 0xad6ea6b0, 0x49a7df7d,
+-                0x9cee60b8, 0x8fedb266, 0xecaa8c71, 0x699a17ff, 0x5664526c, 0xc2b19ee1,
+-                0x193602a5, 0x75094c29, 0xa0591340, 0xe4183a3e, 0x3f54989a, 0x5b429d65,
+-                0x6b8fe4d6, 0x99f73fd6, 0xa1d29c07, 0xefe830f5, 0x4d2d38e6, 0xf0255dc1,
+-                0x4cdd2086, 0x8470eb26, 0x6382e9c6, 0x021ecc5e, 0x09686b3f, 0x3ebaefc9,
+-                0x3c971814, 0x6b6a70a1, 0x687f3584, 0x52a0e286, 0xb79c5305, 0xaa500737,
+-                0x3e07841c, 0x7fdeae5c, 0x8e7d44ec, 0x5716f2b8, 0xb03ada37, 0xf0500c0d,
+-                0xf01c1f04, 0x0200b3ff, 0xae0cf51a, 0x3cb574b2, 0x25837a58, 0xdc0921bd,
+-                0xd19113f9, 0x7ca92ff6, 0x94324773, 0x22f54701, 0x3ae5e581, 0x37c2dadc,
+-                0xc8b57634, 0x9af3dda7, 0xa9446146, 0x0fd0030e, 0xecc8c73e, 0xa4751e41,
+-                0xe238cd99, 0x3bea0e2f, 0x3280bba1, 0x183eb331, 0x4e548b38, 0x4f6db908,
+-                0x6f420d03, 0xf60a04bf, 0x2cb81290, 0x24977c79, 0x5679b072, 0xbcaf89af,
+-                0xde9a771f, 0xd9930810, 0xb38bae12, 0xdccf3f2e, 0x5512721f, 0x2e6b7124,
+-                0x501adde6, 0x9f84cd87, 0x7a584718, 0x7408da17, 0xbc9f9abc, 0xe94b7d8c,
+-                0xec7aec3a, 0xdb851dfa, 0x63094366, 0xc464c3d2, 0xef1c1847, 0x3215d908,
+-                0xdd433b37, 0x24c2ba16, 0x12a14d43, 0x2a65c451, 0x50940002, 0x133ae4dd,
+-                0x71dff89e, 0x10314e55, 0x81ac77d6, 0x5f11199b, 0x043556f1, 0xd7a3c76b,
+-                0x3c11183b, 0x5924a509, 0xf28fe6ed, 0x97f1fbfa, 0x9ebabf2c, 0x1e153c6e,
+-                0x86e34570, 0xeae96fb1, 0x860e5e0a, 0x5a3e2ab3, 0x771fe71c, 0x4e3d06fa,
+-                0x2965dcb9, 0x99e71d0f, 0x803e89d6, 0x5266c825, 0x2e4cc978, 0x9c10b36a,
+-                0xc6150eba, 0x94e2ea78, 0xa5fc3c53, 0x1e0a2df4, 0xf2f74ea7, 0x361d2b3d,
+-                0x1939260f, 0x19c27960, 0x5223a708, 0xf71312b6, 0xebadfe6e, 0xeac31f66,
+-                0xe3bc4595, 0xa67bc883, 0xb17f37d1, 0x018cff28, 0xc332ddef, 0xbe6c5aa5,
+-                0x65582185, 0x68ab9802, 0xeecea50f, 0xdb2f953b, 0x2aef7dad, 0x5b6e2f84,
+-                0x1521b628, 0x29076170, 0xecdd4775, 0x619f1510, 0x13cca830, 0xeb61bd96,
+-                0x0334fe1e, 0xaa0363cf, 0xb5735c90, 0x4c70a239, 0xd59e9e0b, 0xcbaade14,
+-                0xeecc86bc, 0x60622ca7, 0x9cab5cab, 0xb2f3846e, 0x648b1eaf, 0x19bdf0ca,
+-                0xa02369b9, 0x655abb50, 0x40685a32, 0x3c2ab4b3, 0x319ee9d5, 0xc021b8f7,
+-                0x9b540b19, 0x875fa099, 0x95f7997e, 0x623d7da8, 0xf837889a, 0x97e32d77,
+-                0x11ed935f, 0x16681281, 0x0e358829, 0xc7e61fd6, 0x96dedfa1, 0x7858ba99,
+-                0x57f584a5, 0x1b227263, 0x9b83c3ff, 0x1ac24696, 0xcdb30aeb, 0x532e3054,
+-                0x8fd948e4, 0x6dbc3128, 0x58ebf2ef, 0x34c6ffea, 0xfe28ed61, 0xee7c3c73,
+-                0x5d4a14d9, 0xe864b7e3, 0x42105d14, 0x203e13e0, 0x45eee2b6, 0xa3aaabea,
+-                0xdb6c4f15, 0xfacb4fd0, 0xc742f442, 0xef6abbb5, 0x654f3b1d, 0x41cd2105,
+-                0xd81e799e, 0x86854dc7, 0xe44b476a, 0x3d816250, 0xcf62a1f2, 0x5b8d2646,
+-                0xfc8883a0, 0xc1c7b6a3, 0x7f1524c3, 0x69cb7492, 0x47848a0b, 0x5692b285,
+-                0x095bbf00, 0xad19489d, 0x1462b174, 0x23820e00, 0x58428d2a, 0x0c55f5ea,
+-                0x1dadf43e, 0x233f7061, 0x3372f092, 0x8d937e41, 0xd65fecf1, 0x6c223bdb,
+-                0x7cde3759, 0xcbee7460, 0x4085f2a7, 0xce77326e, 0xa6078084, 0x19f8509e,
+-                0xe8efd855, 0x61d99735, 0xa969a7aa, 0xc50c06c2, 0x5a04abfc, 0x800bcadc,
+-                0x9e447a2e, 0xc3453484, 0xfdd56705, 0x0e1e9ec9, 0xdb73dbd3, 0x105588cd,
+-                0x675fda79, 0xe3674340, 0xc5c43465, 0x713e38d8, 0x3d28f89e, 0xf16dff20,
+-                0x153e21e7, 0x8fb03d4a, 0xe6e39f2b, 0xdb83adf7
+-            },
+-            {
+-                0xe93d5a68, 0x948140f7, 0xf64c261c, 0x94692934, 0x411520f7, 0x7602d4f7,
+-                0xbcf46b2e, 0xd4a20068, 0xd4082471, 0x3320f46a, 0x43b7d4b7, 0x500061af,
+-                0x1e39f62e, 0x97244546, 0x14214f74, 0xbf8b8840, 0x4d95fc1d, 0x96b591af,
+-                0x70f4ddd3, 0x66a02f45, 0xbfbc09ec, 0x03bd9785, 0x7fac6dd0, 0x31cb8504,
+-                0x96eb27b3, 0x55fd3941, 0xda2547e6, 0xabca0a9a, 0x28507825, 0x530429f4,
+-                0x0a2c86da, 0xe9b66dfb, 0x68dc1462, 0xd7486900, 0x680ec0a4, 0x27a18dee,
+-                0x4f3ffea2, 0xe887ad8c, 0xb58ce006, 0x7af4d6b6, 0xaace1e7c, 0xd3375fec,
+-                0xce78a399, 0x406b2a42, 0x20fe9e35, 0xd9f385b9, 0xee39d7ab, 0x3b124e8b,
+-                0x1dc9faf7, 0x4b6d1856, 0x26a36631, 0xeae397b2, 0x3a6efa74, 0xdd5b4332,
+-                0x6841e7f7, 0xca7820fb, 0xfb0af54e, 0xd8feb397, 0x454056ac, 0xba489527,
+-                0x55533a3a, 0x20838d87, 0xfe6ba9b7, 0xd096954b, 0x55a867bc, 0xa1159a58,
+-                0xcca92963, 0x99e1db33, 0xa62a4a56, 0x3f3125f9, 0x5ef47e1c, 0x9029317c,
+-                0xfdf8e802, 0x04272f70, 0x80bb155c, 0x05282ce3, 0x95c11548, 0xe4c66d22,
+-                0x48c1133f, 0xc70f86dc, 0x07f9c9ee, 0x41041f0f, 0x404779a4, 0x5d886e17,
+-                0x325f51eb, 0xd59bc0d1, 0xf2bcc18f, 0x41113564, 0x257b7834, 0x602a9c60,
+-                0xdff8e8a3, 0x1f636c1b, 0x0e12b4c2, 0x02e1329e, 0xaf664fd1, 0xcad18115,
+-                0x6b2395e0, 0x333e92e1, 0x3b240b62, 0xeebeb922, 0x85b2a20e, 0xe6ba0d99,
+-                0xde720c8c, 0x2da2f728, 0xd0127845, 0x95b794fd, 0x647d0862, 0xe7ccf5f0,
+-                0x5449a36f, 0x877d48fa, 0xc39dfd27, 0xf33e8d1e, 0x0a476341, 0x992eff74,
+-                0x3a6f6eab, 0xf4f8fd37, 0xa812dc60, 0xa1ebddf8, 0x991be14c, 0xdb6e6b0d,
+-                0xc67b5510, 0x6d672c37, 0x2765d43b, 0xdcd0e804, 0xf1290dc7, 0xcc00ffa3,
+-                0xb5390f92, 0x690fed0b, 0x667b9ffb, 0xcedb7d9c, 0xa091cf0b, 0xd9155ea3,
+-                0xbb132f88, 0x515bad24, 0x7b9479bf, 0x763bd6eb, 0x37392eb3, 0xcc115979,
+-                0x8026e297, 0xf42e312d, 0x6842ada7, 0xc66a2b3b, 0x12754ccc, 0x782ef11c,
+-                0x6a124237, 0xb79251e7, 0x06a1bbe6, 0x4bfb6350, 0x1a6b1018, 0x11caedfa,
+-                0x3d25bdd8, 0xe2e1c3c9, 0x44421659, 0x0a121386, 0xd90cec6e, 0xd5abea2a,
+-                0x64af674e, 0xda86a85f, 0xbebfe988, 0x64e4c3fe, 0x9dbc8057, 0xf0f7c086,
+-                0x60787bf8, 0x6003604d, 0xd1fd8346, 0xf6381fb0, 0x7745ae04, 0xd736fccc,
+-                0x83426b33, 0xf01eab71, 0xb0804187, 0x3c005e5f, 0x77a057be, 0xbde8ae24,
+-                0x55464299, 0xbf582e61, 0x4e58f48f, 0xf2ddfda2, 0xf474ef38, 0x8789bdc2,
+-                0x5366f9c3, 0xc8b38e74, 0xb475f255, 0x46fcd9b9, 0x7aeb2661, 0x8b1ddf84,
+-                0x846a0e79, 0x915f95e2, 0x466e598e, 0x20b45770, 0x8cd55591, 0xc902de4c,
+-                0xb90bace1, 0xbb8205d0, 0x11a86248, 0x7574a99e, 0xb77f19b6, 0xe0a9dc09,
+-                0x662d09a1, 0xc4324633, 0xe85a1f02, 0x09f0be8c, 0x4a99a025, 0x1d6efe10,
+-                0x1ab93d1d, 0x0ba5a4df, 0xa186f20f, 0x2868f169, 0xdcb7da83, 0x573906fe,
+-                0xa1e2ce9b, 0x4fcd7f52, 0x50115e01, 0xa70683fa, 0xa002b5c4, 0x0de6d027,
+-                0x9af88c27, 0x773f8641, 0xc3604c06, 0x61a806b5, 0xf0177a28, 0xc0f586e0,
+-                0x006058aa, 0x30dc7d62, 0x11e69ed7, 0x2338ea63, 0x53c2dd94, 0xc2c21634,
+-                0xbbcbee56, 0x90bcb6de, 0xebfc7da1, 0xce591d76, 0x6f05e409, 0x4b7c0188,
+-                0x39720a3d, 0x7c927c24, 0x86e3725f, 0x724d9db9, 0x1ac15bb4, 0xd39eb8fc,
+-                0xed545578, 0x08fca5b5, 0xd83d7cd3, 0x4dad0fc4, 0x1e50ef5e, 0xb161e6f8,
+-                0xa28514d9, 0x6c51133c, 0x6fd5c7e7, 0x56e14ec4, 0x362abfce, 0xddc6c837,
+-                0xd79a3234, 0x92638212, 0x670efa8e, 0x406000e0
+-            },
+-            {
+-                0x3a39ce37, 0xd3faf5cf, 0xabc27737, 0x5ac52d1b, 0x5cb0679e, 0x4fa33742,
+-                0xd3822740, 0x99bc9bbe, 0xd5118e9d, 0xbf0f7315, 0xd62d1c7e, 0xc700c47b,
+-                0xb78c1b6b, 0x21a19045, 0xb26eb1be, 0x6a366eb4, 0x5748ab2f, 0xbc946e79,
+-                0xc6a376d2, 0x6549c2c8, 0x530ff8ee, 0x468dde7d, 0xd5730a1d, 0x4cd04dc6,
+-                0x2939bbdb, 0xa9ba4650, 0xac9526e8, 0xbe5ee304, 0xa1fad5f0, 0x6a2d519a,
+-                0x63ef8ce2, 0x9a86ee22, 0xc089c2b8, 0x43242ef6, 0xa51e03aa, 0x9cf2d0a4,
+-                0x83c061ba, 0x9be96a4d, 0x8fe51550, 0xba645bd6, 0x2826a2f9, 0xa73a3ae1,
+-                0x4ba99586, 0xef5562e9, 0xc72fefd3, 0xf752f7da, 0x3f046f69, 0x77fa0a59,
+-                0x80e4a915, 0x87b08601, 0x9b09e6ad, 0x3b3ee593, 0xe990fd5a, 0x9e34d797,
+-                0x2cf0b7d9, 0x022b8b51, 0x96d5ac3a, 0x017da67d, 0xd1cf3ed6, 0x7c7d2d28,
+-                0x1f9f25cf, 0xadf2b89b, 0x5ad6b472, 0x5a88f54c, 0xe029ac71, 0xe019a5e6,
+-                0x47b0acfd, 0xed93fa9b, 0xe8d3c48d, 0x283b57cc, 0xf8d56629, 0x79132e28,
+-                0x785f0191, 0xed756055, 0xf7960e44, 0xe3d35e8c, 0x15056dd4, 0x88f46dba,
+-                0x03a16125, 0x0564f0bd, 0xc3eb9e15, 0x3c9057a2, 0x97271aec, 0xa93a072a,
+-                0x1b3f6d9b, 0x1e6321f5, 0xf59c66fb, 0x26dcf319, 0x7533d928, 0xb155fdf5,
+-                0x03563482, 0x8aba3cbb, 0x28517711, 0xc20ad9f8, 0xabcc5167, 0xccad925f,
+-                0x4de81751, 0x3830dc8e, 0x379d5862, 0x9320f991, 0xea7a90c2, 0xfb3e7bce,
+-                0x5121ce64, 0x774fbe32, 0xa8b6e37e, 0xc3293d46, 0x48de5369, 0x6413e680,
+-                0xa2ae0810, 0xdd6db224, 0x69852dfd, 0x09072166, 0xb39a460a, 0x6445c0dd,
+-                0x586cdecf, 0x1c20c8ae, 0x5bbef7dd, 0x1b588d40, 0xccd2017f, 0x6bb4e3bb,
+-                0xdda26a7e, 0x3a59ff45, 0x3e350a44, 0xbcb4cdd5, 0x72eacea8, 0xfa6484bb,
+-                0x8d6612ae, 0xbf3c6f47, 0xd29be463, 0x542f5d9e, 0xaec2771b, 0xf64e6370,
+-                0x740e0d8d, 0xe75b1357, 0xf8721671, 0xaf537d5d, 0x4040cb08, 0x4eb4e2cc,
+-                0x34d2466a, 0x0115af84, 0xe1b00428, 0x95983a1d, 0x06b89fb4, 0xce6ea048,
+-                0x6f3f3b82, 0x3520ab82, 0x011a1d4b, 0x277227f8, 0x611560b1, 0xe7933fdc,
+-                0xbb3a792b, 0x344525bd, 0xa08839e1, 0x51ce794b, 0x2f32c9b7, 0xa01fbac9,
+-                0xe01cc87e, 0xbcc7d1f6, 0xcf0111c3, 0xa1e8aac7, 0x1a908749, 0xd44fbd9a,
+-                0xd0dadecb, 0xd50ada38, 0x0339c32a, 0xc6913667, 0x8df9317c, 0xe0b12b4f,
+-                0xf79e59b7, 0x43f5bb3a, 0xf2d519ff, 0x27d9459c, 0xbf97222c, 0x15e6fc2a,
+-                0x0f91fc71, 0x9b941525, 0xfae59361, 0xceb69ceb, 0xc2a86459, 0x12baa8d1,
+-                0xb6c1075e, 0xe3056a0c, 0x10d25065, 0xcb03a442, 0xe0ec6e0e, 0x1698db3b,
+-                0x4c98a0be, 0x3278e964, 0x9f1f9532, 0xe0d392df, 0xd3a0342b, 0x8971f21e,
+-                0x1b0a7441, 0x4ba3348c, 0xc5be7120, 0xc37632d8, 0xdf359f8d, 0x9b992f2e,
+-                0xe60b6f47, 0x0fe3f11d, 0xe54cda54, 0x1edad891, 0xce6279cf, 0xcd3e7e6f,
+-                0x1618b166, 0xfd2c1d05, 0x848fd2c5, 0xf6fb2299, 0xf523f357, 0xa6327623,
+-                0x93a83531, 0x56cccd02, 0xacf08162, 0x5a75ebb5, 0x6e163697, 0x88d273cc,
+-                0xde966292, 0x81b949d0, 0x4c50901b, 0x71c65614, 0xe6c6c7bd, 0x327a140a,
+-                0x45e1d006, 0xc3f27b9a, 0xc9aa53fd, 0x62a80f00, 0xbb25bfe2, 0x35bdd2f6,
+-                0x71126905, 0xb2040222, 0xb6cbcf7c, 0xcd769c2b, 0x53113ec0, 0x1640e3d3,
+-                0x38abbd60, 0x2547adf0, 0xba38209c, 0xf746ce76, 0x77afa1c5, 0x20756060,
+-                0x85cbfe4e, 0x8ae88dd8, 0x7aaaf9b0, 0x4cf9aa7e, 0x1948c25c, 0x02fb8a8c,
+-                0x01c36ae4, 0xd6ebe1f9, 0x90d4f869, 0xa65cdea0, 0x3f09252d, 0xc208e69f,
+-                0xb74e6132, 0xce77e25b, 0x578fdfe3, 0x3ac372e6
+-            }
+-        };
+-
+-        #endregion
+-
+-        private static readonly int Rounds = 16;
+-
+-        /// <summary>
+-        /// Initializes a new instance of the <see cref="LegacyBlowfish"/> class.
+-        /// </summary>
+-        /// <param name="key">The key to use.</param>
+-        public LegacyBlowfish(byte[] key)
+-        {
+-            foreach (var (i, keyFragment) in WrappingUInt32(key, this.p.Length))
+-                this.p[i] ^= keyFragment;
+-
+-            uint l = 0, r = 0;
+-            for (int i = 0; i < this.p.Length; i += 2)
+-                (l, r) = (this.p[i], this.p[i + 1]) = Encrypt(l, r);
+-
+-            for (int i = 0; i < this.s.GetLength(0); i++)
+-                for (int j = 0; j < this.s.GetLength(1); j += 2)
+-                    (l, r) = (this.s[i, j], this.s[i, j + 1]) = Encrypt(l, r);
+-        }
+-
+-        public byte[] Encrypt(byte[] data)
+-        {
+-            var paddedLength = data.Length % 8 == 0 ? data.Length : data.Length + (8 - (data.Length % 8));
+-            var buffer = new byte[paddedLength];
+-            Buffer.BlockCopy(data, 0, buffer, 0, data.Length);
+-
+-            for (int i = 0; i < paddedLength; i += 8)
+-            {
+-                var (l, r) = Encrypt(BitConverter.ToUInt32(buffer, i), BitConverter.ToUInt32(buffer, i + 4));
+-                CopyUInt32IntoArray(buffer, l, i);
+-                CopyUInt32IntoArray(buffer, r, i + 4);
+-            }
+-
+-            return buffer;
+-        }
+-
+-        public void Decrypt(ref byte[] data)
+-        {
+-            for (int i = 0; i < data.Length; i += 8)
+-            {
+-                var (l, r) = Decrypt(BitConverter.ToUInt32(data, i), BitConverter.ToUInt32(data, i + 4));
+-                CopyUInt32IntoArray(data, l, i);
+-                CopyUInt32IntoArray(data, r, i + 4);
+-            }
+-        }
+-
+-        private static void CopyUInt32IntoArray(byte[] dest, uint val, int offset)
+-        {
+-            dest[offset] = (byte)(val & 0xFF);
+-            dest[offset + 1] = (byte)((val >> 8) & 0xFF);
+-            dest[offset + 2] = (byte)((val >> 16) & 0xFF);
+-            dest[offset + 3] = (byte)((val >> 24) & 0xFF);
+-        }
+-
+-        private uint F(uint i)
+-        {
+-            return ((this.s[0, i >> 24]
+-                     + this.s[1, (i >> 16) & 0xFF])
+-                    ^ this.s[2, (i >> 8) & 0xFF])
+-                   + this.s[3, i & 0xFF];
+-        }
+-
+-        private (uint, uint) Encrypt(uint l, uint r)
+-        {
+-            for (int i = 0; i < Rounds; i += 2)
+-            {
+-                l ^= this.p[i];
+-                r ^= F(l);
+-                r ^= this.p[i + 1];
+-                l ^= F(r);
+-            }
+-
+-            return (r ^ this.p[17], l ^ this.p[16]);
+-        }
+-
+-        private (uint, uint) Decrypt(uint l, uint r)
+-        {
+-            for (int i = Rounds; i > 0; i -= 2)
+-            {
+-                l ^= this.p[i + 1];
+-                r ^= F(l);
+-                r ^= this.p[i];
+-                l ^= F(r);
+-            }
+-
+-            return (r ^ this.p[0], l ^ this.p[1]);
+-        }
+-
+-        private static IEnumerable<TSource> Cycle<TSource>(IEnumerable<TSource> source)
+-        {
+-            while (true)
+-                foreach (TSource t in source)
+-                    yield return t;
+-        }
+-
+-        private IEnumerable<(int, uint)> WrappingUInt32(IEnumerable<byte> source, int count)
+-        {
+-            var enumerator = Cycle(source).GetEnumerator();
+-
+-            for (int i = 0; i < count; i++)
+-            {
+-                var n = 0u;
+-
+-                for (var j = 0; j < 4 && enumerator.MoveNext(); j++)
+-                {
+-#pragma warning disable CS0675
+-                    n = (uint)((n << 8) | (sbyte)enumerator.Current); // NOTE(goat): THIS IS A BUG! SE's implementation wrongly uses signed numbers for this, so we need to as well.
+-#pragma warning restore CS0675
+-                }
+-
+-                yield return (i, n);
+-            }
+-        }
+-    }
+-}
+diff --git a/Dalamud.Injector/Program.cs b/Dalamud.Injector/Program.cs
+index 5bfa5ef04..b0903f2c7 100644
+--- a/Dalamud.Injector/Program.cs
++++ b/Dalamud.Injector/Program.cs
+@@ -7,10 +7,10 @@ using System.Linq;
+ using System.Reflection;
+ using System.Runtime.InteropServices;
+ using System.Text;
+-using System.Text.RegularExpressions;
+ 
+ using Dalamud.Common;
+ using Dalamud.Common.Game;
++
+ using Dalamud.Common.Util;
+ using Newtonsoft.Json;
+ using Reloaded.Memory.Buffers;
+@@ -44,22 +44,17 @@ namespace Dalamud.Injector
+                 args.Remove("-v"); // Remove "verbose" flag
+                 args.Remove("--verbose");
+ 
+-                if (args.Count >= 2 && args[1].ToLowerInvariant() == "launch-test")
+-                {
+-                    return ProcessLaunchTestCommand(args);
+-                }
+-
+                 DalamudStartInfo? startInfo = null;
+                 if (args.Count == 1)
+                 {
++#if !DEBUG
++                    Log.Error("You must provide at least one argument.");
++                    return 1;
++#else
+                     // No command defaults to inject
+                     args.Add("inject");
+                     args.Add("--all");
+-
+-    #if !DEBUG
+-                    args.Add("--warn");
+-    #endif
+-
++#endif
+                 }
+                 else if (int.TryParse(args[1], out var _))
+                 {
+@@ -91,19 +86,10 @@ namespace Dalamud.Injector
+                 args.Remove("--crash-handler-console");
+ 
+                 var mainCommand = args[1].ToLowerInvariant();
+-                if (mainCommand == "sandbox-prepare")
+-                {
+-                    return ProcessSandboxPrepareCommand(args, startInfo);
+-                }
+-                else if (mainCommand.Length > 0 && mainCommand.Length <= 6 && "inject"[..mainCommand.Length] == mainCommand)
++                if (mainCommand.Length > 0 && mainCommand.Length <= 6 && "inject"[..mainCommand.Length] == mainCommand)
+                 {
+                     return ProcessInjectCommand(args, startInfo);
+                 }
+-                else if (mainCommand.Length > 0 && mainCommand.Length <= 6 &&
+-                         "launch"[..mainCommand.Length] == mainCommand)
+-                {
+-                    return ProcessLaunchCommand(args, startInfo);
+-                }
+                 else if (mainCommand.Length > 0 && mainCommand.Length <= 4 &&
+                          "help"[..mainCommand.Length] == mainCommand)
+                 {
+@@ -137,12 +123,11 @@ namespace Dalamud.Injector
+ 
+         private static void Init(List<string> args)
+         {
+-            InitLogging(args.Any(x => x is "-v" or "--verbose"), args);
++            InitLogging(args.Any(x => x == "-v"), args);
+             InitUnhandledException(args);
+ 
+             var cwd = new FileInfo(Assembly.GetExecutingAssembly().Location).Directory
+                       ?? throw new DirectoryNotFoundException("Could not determine binary location.");
+-
+             if (cwd.FullName != Directory.GetCurrentDirectory())
+             {
+                 Log.Debug($"Changing cwd to {cwd}");
+@@ -298,6 +283,7 @@ namespace Dalamud.Injector
+             var configurationPath = startInfo.ConfigurationPath;
+             var pluginDirectory = startInfo.PluginDirectory;
+             var assetDirectory = startInfo.AssetDirectory;
++            var runtimeDirectory = startInfo.RuntimeDirectory;
+             var tempDirectory = startInfo.TempDirectory;
+             var delayInitializeMs = startInfo.DelayInitializeMs;
+             var logName = startInfo.LogName;
+@@ -306,6 +292,7 @@ namespace Dalamud.Injector
+             var platformStr = startInfo.Platform.ToString().ToLowerInvariant();
+             var unhandledExceptionStr = startInfo.UnhandledException.ToString().ToLowerInvariant();
+             var troubleshootingData = "{\"empty\": true, \"description\": \"No troubleshooting data supplied.\"}";
++            var launcherDirectory = startInfo.LauncherDirectory;
+ 
+             // env vars are brought in prior to launch args, since args can override them.
+             if (EnvironmentUtils.TryGetEnvironmentVariable("XL_PLATFORM", out var xlPlatformEnv))
+@@ -329,6 +316,10 @@ namespace Dalamud.Injector
+                 {
+                     assetDirectory = args[i][key.Length..];
+                 }
++                else if (args[i].StartsWith(key = "--dalamud-runtime-directory="))
++                {
++                    runtimeDirectory = args[i][key.Length..];
++                }
+                 else if (args[i].StartsWith(key = "--dalamud-temp-directory="))
+                 {
+                     tempDirectory = args[i][key.Length..];
+@@ -361,6 +352,10 @@ namespace Dalamud.Injector
+                 {
+                     unhandledExceptionStr = args[i][key.Length..];
+                 }
++                else if (args[i].StartsWith(key = "--launcher-directory="))
++                {
++                    launcherDirectory = args[i][key.Length..];
++                }
+                 else
+                 {
+                     continue;
+@@ -371,12 +366,13 @@ namespace Dalamud.Injector
+             }
+ 
+             var appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+-            var xivlauncherDir = Path.Combine(appDataDir, "XIVLauncher");
++            var standaloneDir = Path.Combine(appDataDir, "DalamudStandaloneCN");
+ 
+             workingDirectory ??= Directory.GetCurrentDirectory();
+-            configurationPath ??= Path.Combine(xivlauncherDir, "dalamudConfig.json");
+-            pluginDirectory ??= Path.Combine(xivlauncherDir, "installedPlugins");
+-            assetDirectory ??= Path.Combine(xivlauncherDir, "dalamudAssets", "dev");
++            configurationPath ??= Path.Combine(standaloneDir, "dalamudConfig.json");
++            pluginDirectory ??= Path.Combine(standaloneDir, "installedPlugins");
++            assetDirectory ??= Path.Combine(standaloneDir, "assets", "current");
++            runtimeDirectory ??= Path.Combine(standaloneDir, "runtime");
+ 
+             ClientLanguage clientLanguage;
+             if (languageStr[0..(len = Math.Min(languageStr.Length, (key = "english").Length))] == key[0..len])
+@@ -407,6 +403,10 @@ namespace Dalamud.Injector
+             {
+                 clientLanguage = ClientLanguage.French;
+             }
++            else if (languageStr[0..(len = Math.Min(languageStr.Length, (key = "chinesesimplified").Length))] == key[0..len])
++            {
++                clientLanguage = ClientLanguage.ChineseSimplified;
++            }
+             else if (int.TryParse(languageStr, out var languageInt) && Enum.IsDefined((ClientLanguage)languageInt))
+             {
+                 clientLanguage = (ClientLanguage)languageInt;
+@@ -445,6 +445,7 @@ namespace Dalamud.Injector
+             startInfo.ConfigurationPath = configurationPath;
+             startInfo.PluginDirectory = pluginDirectory;
+             startInfo.AssetDirectory = assetDirectory;
++            startInfo.RuntimeDirectory = runtimeDirectory;
+             startInfo.TempDirectory = tempDirectory;
+             startInfo.Language = clientLanguage;
+             startInfo.Platform = platform;
+@@ -453,12 +454,12 @@ namespace Dalamud.Injector
+             startInfo.TroubleshootingPackData = troubleshootingData;
+             startInfo.LogName = logName;
+             startInfo.LogPath = logPath;
++            startInfo.LauncherDirectory = launcherDirectory;
+ 
+-            // TODO: XL should set --logpath to its roaming path. We are only doing this here until that's rolled out.
+ #if DEBUG
+             startInfo.LogPath ??= startInfo.WorkingDirectory;
+ #else
+-            startInfo.LogPath ??= xivlauncherDir;
++            startInfo.LogPath ??= Path.Combine(standaloneDir, "logs");
+ #endif
+             startInfo.LogName ??= string.Empty;
+ 
+@@ -478,7 +479,6 @@ namespace Dalamud.Injector
+                 "symbol_load_patches",
+                 "disable_game_debugging_protection",
+                 "faster_decompression",
+-                "appcontainer_known_folders",
+             };
+             startInfo.BootDotnetOpenProcessHookMode = 0;
+             startInfo.BootWaitMessageBox |= args.Contains("--msgbox1") ? 1 : 0;
+@@ -507,10 +507,6 @@ namespace Dalamud.Injector
+         {
+             var exeName = Path.GetFileName(args[0]);
+ 
+-            var exeSpaces = string.Empty;
+-            for (var i = exeName.Length; i > 0; i--)
+-                exeSpaces += " ";
+-
+             if (particularCommand is null or "help")
+             {
+                 Console.WriteLine("{0} help [command]", exeName);
+@@ -521,32 +517,10 @@ namespace Dalamud.Injector
+                 Console.WriteLine("{0} inject [-h/--help] [-a/--all] [--warn] [--fix-acl] [--se-debug-privilege] [pid1] [pid2] [pid3] ...", exeName);
+             }
+ 
+-            if (particularCommand is null or "launch")
+-            {
+-                Console.WriteLine("{0} launch [-h/--help] [-f/--fake-arguments]", exeName);
+-                Console.WriteLine("{0}        [-g path/to/ffxiv_dx11.exe] [--game=path/to/ffxiv_dx11.exe]", exeSpaces);
+-                Console.WriteLine("{0}        [-m entrypoint|inject] [--mode=entrypoint|inject]", exeSpaces);
+-                Console.WriteLine("{0}        [--handle-owner=inherited-handle-value]", exeSpaces);
+-                Console.WriteLine("{0}        [--without-dalamud] [--no-fix-acl]", exeSpaces);
+-                Console.WriteLine("{0}        [--no-wait]", exeSpaces);
+-                Console.WriteLine("{0}        [--sandbox] [--no-sandbox] [--sandbox-config=path/to/dalamudSandbox.json]", exeSpaces);
+-                Console.WriteLine("{0}        [-- game_arg1=value1 game_arg2=value2 ...]", exeSpaces);
+-            }
+-
+-            if (particularCommand is null or "sandbox-prepare")
+-            {
+-                Console.WriteLine("{0} sandbox-prepare [-h/--help] [-g path/to/ffxiv_dx11.exe] [--game=path/to/ffxiv_dx11.exe]", exeName);
+-                Console.WriteLine("{0}                 [--sandbox-config=path/to/dalamudSandbox.json] [--write-config]", exeSpaces);
+-                Console.WriteLine("{0}   Prepares the environment to properly run with --sandbox. Run once from an", exeSpaces);
+-                Console.WriteLine("{0}   elevated command prompt. Paths you don't own and the loopback excemption require running with this at least once.", exeSpaces);
+-                Console.WriteLine("{0}   Sandboxing applies to every launch when \"enabledGlobally\" is set in the sandbox configuration.", exeSpaces);
+-                Console.WriteLine("{0}   --no-sandbox opts a single launch out of that.", exeSpaces);
+-                Console.WriteLine("{0}   --write-config creates a configuration at the default location, if there isn't one yet.", exeSpaces);
+-            }
+-
+             Console.WriteLine("Specifying dalamud start info: [--dalamud-working-directory=path] [--dalamud-configuration-path=path]");
+             Console.WriteLine("                               [--dalamud-plugin-directory=path] [--dalamud-platform=win32|linux|macOS]");
+-            Console.WriteLine("                               [--dalamud-asset-directory=path] [--dalamud-delay-initialize=0(ms)]");
++            Console.WriteLine("                               [--dalamud-asset-directory=path] [--dalamud-runtime-directory=path]");
++            Console.WriteLine("                               [--dalamud-delay-initialize=0(ms)]");
+             Console.WriteLine("                               [--dalamud-client-language=0-3|j(apanese)|e(nglish)|d|g(erman)|f(rench)]");
+ 
+             Console.WriteLine("Verbose logging:\t[-v]");
+@@ -671,821 +645,10 @@ namespace Dalamud.Injector
+             return 0;
+         }
+ 
+-        private static int ProcessLaunchCommand(List<string> args, DalamudStartInfo dalamudStartInfo)
+-        {
+-            string? gamePath = null;
+-            List<string> gameArguments = new();
+-            string? mode = null;
+-            var useFakeArguments = false;
+-            var showHelp = args.Count <= 2;
+-            var handleOwner = IntPtr.Zero;
+-            var withoutDalamud = false;
+-            var noFixAcl = false;
+-            var waitForGameWindow = true;
+-            var encryptArguments = false;
+-
+-            // null = not specified on command line, use config
+-            bool? useSandbox = null;
+-            string? sandboxConfigPath = null;
+-
+-            var parsingGameArgument = false;
+-            for (var i = 2; i < args.Count; i++)
+-            {
+-                if (parsingGameArgument)
+-                {
+-                    gameArguments.Add(args[i]);
+-                    continue;
+-                }
+-
+-                if (args[i] == "-h" || args[i] == "--help")
+-                {
+-                    showHelp = true;
+-                }
+-                else if (args[i] == "-f" || args[i] == "--fake-arguments")
+-                {
+-                    useFakeArguments = true;
+-                }
+-                else if (args[i] == "--without-dalamud")
+-                {
+-                    withoutDalamud = true;
+-                }
+-                else if (args[i] == "--no-wait")
+-                {
+-                    waitForGameWindow = false;
+-                }
+-                else if (args[i] == "--no-fix-acl" || args[i] == "--no-acl-fix")
+-                {
+-                    noFixAcl = true;
+-                }
+-                else if (args[i] == "--sandbox")
+-                {
+-                    useSandbox = true;
+-                }
+-                else if (args[i] == "--no-sandbox")
+-                {
+-                    useSandbox = false;
+-                }
+-                else if (args[i].StartsWith("--sandbox-config="))
+-                {
+-                    // When using --sandbox-config assume sandboxing, but never when --no-sandbox
+-                    useSandbox ??= true;
+-                    sandboxConfigPath = args[i].Split('=', 2)[1];
+-                }
+-                else if (args[i] == "-g")
+-                {
+-                    gamePath = args[++i];
+-                }
+-                else if (args[i].StartsWith("--game="))
+-                {
+-                    gamePath = args[i].Split('=', 2)[1];
+-                }
+-                else if (args[i] == "-m")
+-                {
+-                    mode = args[++i];
+-                }
+-                else if (args[i].StartsWith("--mode="))
+-                {
+-                    mode = args[i].Split('=', 2)[1];
+-                }
+-                else if (args[i].StartsWith("--handle-owner="))
+-                {
+-                    handleOwner = IntPtr.Parse(args[i].Split('=', 2)[1]);
+-                }
+-                else if (args[i] == "--")
+-                {
+-                    parsingGameArgument = true;
+-                }
+-                else
+-                {
+-                    Log.Warning($"\"{args[i]}\" is not a valid command line argument, ignoring.");
+-                }
+-            }
+-
+-            var checksumTable = "fX1pGtdS5CAP4_VL";
+-            var argDelimiterRegex = new Regex(" (?<!(?:^|[^ ])(?:  )*)/");
+-            var kvDelimiterRegex = new Regex(" (?<!(?:^|[^ ])(?:  )*)=");
+-            gameArguments = gameArguments.SelectMany(x =>
+-            {
+-                if (!x.StartsWith("//**sqex0003") || !x.EndsWith("**//"))
+-                {
+-                    return new List<string>() { x };
+-                }
+-
+-                var checksum = checksumTable.IndexOf(x[x.Length - 5]);
+-                if (checksum == -1)
+-                {
+-                    return new List<string>() { x };
+-                }
+-
+-                var encData = Convert.FromBase64String(x.Substring(12, x.Length - 12 - 5).Replace('-', '+').Replace('_', '/').Replace('*', '='));
+-                var rawData = new byte[encData.Length];
+-
+-                for (var i = (uint)checksum; i < 0x10000u; i += 0x10)
+-                {
+-                    var bf = new LegacyBlowfish(Encoding.UTF8.GetBytes($"{i << 16:x08}"));
+-                    Buffer.BlockCopy(encData, 0, rawData, 0, rawData.Length);
+-                    bf.Decrypt(ref rawData);
+-                    var rawString = Encoding.UTF8.GetString(rawData).Split('\0', 2).First();
+-                    encryptArguments = true;
+-                    var args = argDelimiterRegex.Split(rawString).Skip(1).Select(y => string.Join('=', kvDelimiterRegex.Split(y, 2)).Replace("  ", " ")).ToList();
+-                    if (!args.Any())
+-                    {
+-                        continue;
+-                    }
+-
+-                    if (!args.First().StartsWith("T="))
+-                    {
+-                        continue;
+-                    }
+-
+-                    if (!uint.TryParse(args.First().Substring(2), out var tickCount))
+-                    {
+-                        continue;
+-                    }
+-
+-                    if (tickCount >> 16 != i)
+-                    {
+-                        continue;
+-                    }
+-
+-                    return args.Skip(1);
+-                }
+-
+-                return new List<string>() { x };
+-            }).ToList();
+-
+-            if (showHelp)
+-            {
+-                ProcessHelpCommand(args, "launch");
+-                return args.Count <= 2 ? -1 : 0;
+-            }
+-
+-            mode = mode == null ? "entrypoint" : mode.ToLowerInvariant();
+-            if (mode.Length > 0 && mode.Length <= 10 && "entrypoint"[0..mode.Length] == mode)
+-            {
+-                dalamudStartInfo.LoadMethod = LoadMethod.Entrypoint;
+-            }
+-            else if (mode.Length > 0 && mode.Length <= 6 && "inject"[0..mode.Length] == mode)
+-            {
+-                dalamudStartInfo.LoadMethod = LoadMethod.DllInject;
+-            }
+-            else
+-            {
+-                throw new CommandLineException($"\"{mode}\" is not a valid Dalamud load mode.");
+-            }
+-
+-            if (gamePath == null)
+-            {
+-                gamePath = ResolveGamePath(dalamudStartInfo);
+-                if (gamePath == null)
+-                    return -1;
+-            }
+-
+-            if (useFakeArguments)
+-            {
+-                var gameParent = Directory.GetParent(gamePath)?.FullName
+-                    ?? throw new DirectoryNotFoundException($"Could not determine parent directory of {gamePath}.");
+-
+-                var gameVersion = File.ReadAllText(Path.Combine(gameParent, "ffxivgame.ver"));
+-                var sqpackPath = Path.Combine(gameParent, "sqpack");
+-                var maxEntitledExpansionId = 0;
+-                while (File.Exists(Path.Combine(sqpackPath, $"ex{maxEntitledExpansionId + 1}", $"ex{maxEntitledExpansionId + 1}.ver")))
+-                    maxEntitledExpansionId++;
+-
+-                gameArguments.InsertRange(0, new string[]
+-                {
+-                    "DEV.TestSID=0",
+-                    "DEV.UseSqPack=1",
+-                    "DEV.DataPathType=1",
+-                    "DEV.LobbyHost01=127.0.0.1",
+-                    "DEV.LobbyPort01=54994",
+-                    "DEV.LobbyHost02=127.0.0.2",
+-                    "DEV.LobbyPort02=54994",
+-                    "DEV.LobbyHost03=127.0.0.3",
+-                    "DEV.LobbyPort03=54994",
+-                    "DEV.LobbyHost04=127.0.0.4",
+-                    "DEV.LobbyPort04=54994",
+-                    "DEV.LobbyHost05=127.0.0.5",
+-                    "DEV.LobbyPort05=54994",
+-                    "DEV.LobbyHost06=127.0.0.6",
+-                    "DEV.LobbyPort06=54994",
+-                    "DEV.LobbyHost07=127.0.0.7",
+-                    "DEV.LobbyPort07=54994",
+-                    "DEV.LobbyHost08=127.0.0.8",
+-                    "DEV.LobbyPort08=54994",
+-                    "DEV.LobbyHost09=127.0.0.9",
+-                    "DEV.LobbyPort09=54994",
+-                    "SYS.Region=0",
+-                    $"language={(int)dalamudStartInfo.Language}",
+-                    $"ver={gameVersion}",
+-                    $"DEV.MaxEntitledExpansionID={maxEntitledExpansionId}",
+-                    "DEV.GMServerHost=127.0.0.100",
+-                    "DEV.GameQuitMessageBox=0",
+-                });
+-            }
+-
+-            string gameArgumentString;
+-            if (encryptArguments)
+-            {
+-                var rawTickCount = (uint)Environment.TickCount;
+-                var ticks = rawTickCount & 0xFFFF_FFFFu;
+-                var key = ticks & 0xFFFF_0000u;
+-                gameArguments.Insert(0, $"T={ticks}");
+-
+-                var escapeValue = (string x) => x.Replace(" ", "  ");
+-                gameArgumentString = gameArguments.Select(x => x.Split('=', 2)).Aggregate(new StringBuilder(), (whole, part) => whole.Append($" /{escapeValue(part[0])} ={escapeValue(part.Length > 1 ? part[1] : string.Empty)}")).ToString();
+-                var bf = new LegacyBlowfish(Encoding.UTF8.GetBytes($"{key:x08}"));
+-                var ciphertext = bf.Encrypt(Encoding.UTF8.GetBytes(gameArgumentString));
+-                var base64Str = Convert.ToBase64String(ciphertext).Replace('+', '-').Replace('/', '_').Replace('=', '*');
+-                var checksum = checksumTable[(int)(key >> 16) & 0xF];
+-                gameArgumentString = $"//**sqex0003{base64Str}{checksum}**//";
+-            }
+-            else
+-            {
+-                gameArgumentString = string.Join(" ", gameArguments.Select(x => EncodeParameterArgument(x)));
+-            }
+-
+-            AppContainerLaunchContext? sandboxContext = null;
+-            if (useSandbox != false)
+-            {
+-                var sandboxConfig = SandboxConfiguration.Load(
+-                    sandboxConfigPath ?? SandboxConfiguration.DefaultPath,
+-                    sandboxConfigPath != null);
+-
+-                if (useSandbox != true && sandboxConfig.EnabledGlobally)
+-                    Log.Information("[SANDBOX] Enabled by configuration at '{DefaultConfigPath}'. Pass --no-sandbox to disable.", SandboxConfiguration.DefaultPath);
+-
+-                if (useSandbox == true || sandboxConfig.EnabledGlobally)
+-                    sandboxContext = SetupSandbox(dalamudStartInfo, sandboxConfig, gamePath);
+-            }
+-
+-            Process process;
+-            try
+-            {
+-                process = GameStart.LaunchGame(
+-                    Path.GetDirectoryName(gamePath) ?? throw new DirectoryNotFoundException($"Could not determine parent directory of {gamePath}."),
+-                    gamePath,
+-                    gameArgumentString,
+-                    noFixAcl,
+-                    p =>
+-                    {
+-                        if (!withoutDalamud && dalamudStartInfo.LoadMethod == LoadMethod.Entrypoint)
+-                        {
+-                            var startInfo = AdjustStartInfo(dalamudStartInfo, gamePath);
+-                            Log.Information("Using start info: {0}", JsonConvert.SerializeObject(startInfo));
+-                            Marshal.ThrowExceptionForHR(
+-                                RewriteRemoteEntryPointW(p.Handle, gamePath, JsonConvert.SerializeObject(startInfo)));
+-                            Log.Verbose("RewriteRemoteEntryPointW called!");
+-                        }
+-                    },
+-                    waitForGameWindow,
+-                    sandboxContext);
+-            }
+-            finally
+-            {
+-                sandboxContext?.Dispose();
+-            }
+-
+-            Log.Verbose("Game process started with PID {0}", process.Id);
+-
+-            if (!withoutDalamud && dalamudStartInfo.LoadMethod == LoadMethod.DllInject)
+-            {
+-                var startInfo = AdjustStartInfo(dalamudStartInfo, gamePath);
+-                Log.Information("Using start info: {0}", JsonConvert.SerializeObject(startInfo));
+-                Inject(process, startInfo, false);
+-            }
+-
+-            var processHandleForOwner = HANDLE.Null;
+-            if (handleOwner != IntPtr.Zero)
+-            {
+-                unsafe
+-                {
+-                    if (!Windows.Win32.PInvoke.DuplicateHandle(
+-                            new HANDLE(Process.GetCurrentProcess().Handle.ToPointer()),
+-                            new HANDLE(process.Handle.ToPointer()),
+-                            new HANDLE(handleOwner),
+-                            &processHandleForOwner,
+-                            0,
+-                            false,
+-                            DUPLICATE_HANDLE_OPTIONS.DUPLICATE_SAME_ACCESS))
+-                    {
+-                        Log.Warning("Failed to call DuplicateHandle: Win32 error code {0}", Marshal.GetLastWin32Error());
+-                    }
+-                }
+-            }
+-
+-            Console.WriteLine($"{{\"pid\": {process.Id}, \"handle\": {(IntPtr)processHandleForOwner}}}");
+-
+-            Log.CloseAndFlush();
+-            return 0;
+-        }
+-
+-        /// <summary>
+-        /// Prepare the AppContainer sandbox by loading the config and changing/migrating paths as necessary.
+-        /// </summary>
+-        private static SandboxLayout BuildSandboxLayout(DalamudStartInfo startInfo, SandboxConfiguration config, string gamePath)
+-        {
+-            var appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+-            var xivlauncherDir = Path.Combine(appDataDir, "XIVLauncher");
+-
+-            // XL root must never be readable or writable from the sandbox, so we need to move all data
+-            // into a subfolder that we can grant access to
+-            var dataDir = Path.Combine(xivlauncherDir, "dalamudUserData");
+-            var logsDir = Path.Combine(dataDir, "logs");
+-            var tempDir = Path.Combine(dataDir, "temp");
+-            Directory.CreateDirectory(dataDir);
+-            Directory.CreateDirectory(logsDir);
+-            Directory.CreateDirectory(tempDir);
+-
+-            var configDir = Path.GetDirectoryName(Path.GetFullPath(startInfo.ConfigurationPath!));
+-            if (PathsEqual(configDir, xivlauncherDir))
+-            {
+-                var configFileName = Path.GetFileName(startInfo.ConfigurationPath!);
+-                MigrateFileToSandbox(Path.Combine(xivlauncherDir, configFileName), Path.Combine(dataDir, configFileName));
+-                MigrateFileToSandbox(Path.Combine(xivlauncherDir, "dalamudVfs.db"), Path.Combine(dataDir, "dalamudVfs.db"));
+-                MigrateFileToSandbox(Path.Combine(xivlauncherDir, "dalamudUI.ini"), Path.Combine(dataDir, "dalamudUI.ini"));
+-                MigrateDirectoryToSandbox(Path.Combine(xivlauncherDir, "pluginConfigs"), Path.Combine(dataDir, "pluginConfigs"));
+-
+-                startInfo.ConfigurationPath = Path.Combine(dataDir, configFileName);
+-                Log.Information("[SANDBOX] Redirected configuration path to {Path}", startInfo.ConfigurationPath);
+-            }
+-
+-            if (PathsEqual(startInfo.LogPath, xivlauncherDir) ||
+-                IsAtOrUnder(startInfo.LogPath, startInfo.WorkingDirectory))
+-            {
+-                startInfo.LogPath = logsDir;
+-                Log.Information("[SANDBOX] Redirected log path to {Path}", startInfo.LogPath);
+-            }
+-
+-            startInfo.BootLogPath = GetLogPath(startInfo.LogPath, "dalamud.boot", startInfo.LogName);
+-
+-            var grants = new List<SandboxGrant>();
+-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+-
+-            void Add(string? path, uint access, bool create = false)
+-            {
+-                if (string.IsNullOrEmpty(path))
+-                    return;
+-
+-                path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+-                if (!seen.Add($"{path}|{access}"))
+-                    return;
+-
+-                grants.Add(new SandboxGrant(path, access, create));
+-            }
+-
+-            // Read/execute for binaries and static data
+-            var runtimeDir = Environment.GetEnvironmentVariable("DALAMUD_RUNTIME") ?? Path.Combine(xivlauncherDir, "runtime");
+-            Add(Path.GetDirectoryName(gamePath), AppContainerHelper.AccessReadExecute);
+-            Add(startInfo.WorkingDirectory, AppContainerHelper.AccessReadExecute);
+-            Add(runtimeDir, AppContainerHelper.AccessReadExecute);
+-            Add(startInfo.AssetDirectory, AppContainerHelper.AccessReadExecute);
+-
+-            // Modify for state
+-            if (!string.IsNullOrEmpty(startInfo.AssetDirectory))
+-                Add(Path.Combine(startInfo.AssetDirectory, "..", "local"),  AppContainerHelper.AccessModify, true);
+-
+-            Add(startInfo.PluginDirectory, AppContainerHelper.AccessModify, true);
+-            Add(dataDir, AppContainerHelper.AccessModify);
+-            Add(Path.GetDirectoryName(startInfo.ConfigurationPath!), AppContainerHelper.AccessModify);
+-            Add(startInfo.LogPath, AppContainerHelper.AccessModify);
+-            Add(Path.Combine(xivlauncherDir, "devPlugins"), AppContainerHelper.AccessModify);
+-            Add(
+-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "My Games", "FINAL FANTASY XIV - A Realm Reborn"),
+-                AppContainerHelper.AccessModify,
+-                true);
+-            if (!string.IsNullOrEmpty(startInfo.TempDirectory))
+-                Add(startInfo.TempDirectory, AppContainerHelper.AccessModify, true);
+-
+-            foreach (var allowed in config.AllowedPaths)
+-            {
+-                Add(
+-                    Environment.ExpandEnvironmentVariables(allowed.Path),
+-                    allowed.Write ? AppContainerHelper.AccessModify : AppContainerHelper.AccessReadExecute);
+-            }
+-
+-            // Sanity check all grants against folders that we should absolutely never grant modify to
+-            foreach (var grant in grants.Where(x => x.Access == AppContainerHelper.AccessModify))
+-            {
+-                string? violated = null;
+-                if (PathsEqual(grant.Path, xivlauncherDir))
+-                    violated = "the XIVLauncher root";
+-                else if (IsAtOrUnder(grant.Path, startInfo.WorkingDirectory))
+-                    violated = "Dalamud's working directory (holds Dalamud's own binaries)";
+-                else if (IsAtOrUnder(grant.Path, runtimeDir))
+-                    violated = "the .NET runtime directory";
+-                else if (IsAtOrUnder(grant.Path, Path.GetDirectoryName(gamePath)))
+-                    violated = "the game installation directory";
+-
+-                if (violated != null)
+-                {
+-                    throw new CommandLineException(
+-                        $"Refusing to grant the sandbox write access to {grant.Path}: it is inside {violated}. " +
+-                        "This must stay read-only for the sandbox to be meaningful.");
+-                }
+-            }
+-
+-            return new SandboxLayout(config, tempDir, runtimeDir, grants);
+-        }
+-
+-        /// <summary>
+-        /// Apply or verify the sandbox layout's grants against the actual container.
+-        /// Paths whose DACL could not be written are returned rather than throwing, since we might not
+-        /// have permissions to set DACLs on some objects and need to tell the user that elevation is required.
+-        /// </summary>
+-        private static List<SandboxGrant> ApplySandboxGrants(SandboxLayout layout, AppContainerLaunchContext ctx, bool verbose)
+-        {
+-            var denied = new List<SandboxGrant>();
+-
+-            foreach (var grant in layout.Grants)
+-            {
+-                if (grant.Create)
+-                    Directory.CreateDirectory(grant.Path);
+-
+-                if (!Directory.Exists(grant.Path) && !File.Exists(grant.Path))
+-                {
+-                    Log.Verbose("[SANDBOX] Skipping nonexistent path {Path}", grant.Path);
+-                    continue;
+-                }
+-
+-                var access = grant.Access == AppContainerHelper.AccessModify ? "modify" : "read/execute";
+-                switch (AppContainerHelper.EnsureAccess(grant.Path, ctx.ContainerSid, grant.Access))
+-                {
+-                    case GrantResult.AlreadyGranted:
+-                        if (verbose)
+-                            Log.Information("[SANDBOX] Already has {Access}: {Path}", access, grant.Path);
+-                        break;
+-
+-                    case GrantResult.Granted:
+-                        Log.Information("[SANDBOX] Granted {Access} on {Path}", access, grant.Path);
+-                        break;
+-
+-                    case GrantResult.AccessDenied:
+-                        denied.Add(grant);
+-                        break;
+-                }
+-            }
+-
+-            return denied;
+-        }
+-
+-        private static AppContainerLaunchContext? SetupSandbox(DalamudStartInfo startInfo, SandboxConfiguration config, string gamePath)
+-        {
+-            if (startInfo.Platform != OSPlatform.Windows)
+-            {
+-                Log.Warning("[SANDBOX] AppContainer sandboxing is only supported on Windows, launching without a sandbox");
+-                return null;
+-            }
+-
+-            var layout = BuildSandboxLayout(startInfo, config, gamePath);
+-
+-            Log.Verbose("[SANDBOX] Using sandbox layout: {Layout}", JsonConvert.SerializeObject(layout));
+-
+-            var ctx = AppContainerHelper.CreateContext(
+-                layout.Config.ContainerName,
+-                "Dalamud",
+-                "FFXIV running under Dalamud's AppContainer sandbox",
+-                layout.Config.Capabilities);
+-
+-            try
+-            {
+-                ctx.TempDirectoryOverride = layout.TempDirectory;
+-                ctx.RuntimeDirectoryOverride = layout.RuntimeDirectory;
+-                Log.Information("[SANDBOX] Using AppContainer {Name} ({Sid})", layout.Config.ContainerName, ctx.ContainerSidString);
+-
+-                var denied = ApplySandboxGrants(layout, ctx, false);
+-                if (denied.Count > 0)
+-                {
+-                    throw new SandboxPreparationRequiredException(
+-                        denied.Select(x => x.Path).ToList(),
+-                        layout.Config.ContainerName);
+-                }
+-
+-                if (layout.Config.LoopbackExempt)
+-                    AppContainerHelper.TryAddLoopbackExemption(ctx);
+-
+-                return ctx;
+-            }
+-            catch
+-            {
+-                ctx.Dispose();
+-                throw;
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Prepares persistent filesystem ACLs and the loopback excemption, if necessary.
+-        /// </summary>
+-        private static int ProcessSandboxPrepareCommand(List<string> args, DalamudStartInfo startInfo)
+-        {
+-            string? gamePath = null;
+-            string? sandboxConfigPath = null;
+-            var showHelp = false;
+-            var writeConfig = false;
+-
+-            for (var i = 2; i < args.Count; i++)
+-            {
+-                if (args[i] == "-h" || args[i] == "--help")
+-                    showHelp = true;
+-                else if (args[i] == "-g")
+-                    gamePath = args[++i];
+-                else if (args[i].StartsWith("--game="))
+-                    gamePath = args[i].Split('=', 2)[1];
+-                else if (args[i].StartsWith("--sandbox-config="))
+-                    sandboxConfigPath = args[i].Split('=', 2)[1];
+-                else if (args[i] == "--write-config")
+-                    writeConfig = true;
+-                else
+-                    Log.Warning($"\"{args[i]}\" is not a valid command line argument, ignoring.");
+-            }
+-
+-            if (showHelp)
+-            {
+-                ProcessHelpCommand(args, "sandbox-prepare");
+-                return 0;
+-            }
+-
+-            if (startInfo.Platform != OSPlatform.Windows)
+-            {
+-                Log.Error("AppContainer sandboxing is only supported on Windows.");
+-                return -1;
+-            }
+-
+-            gamePath ??= ResolveGamePath(startInfo);
+-            if (gamePath == null)
+-                return -1;
+-
+-            var elevated = AppContainerHelper.IsElevated();
+-            Log.Information("Running {Elevated}elevated.", elevated ? string.Empty : "un");
+-
+-            var config = SandboxConfiguration.Load(
+-                sandboxConfigPath ?? SandboxConfiguration.DefaultPath,
+-                sandboxConfigPath != null);
+-
+-            if (writeConfig)
+-            {
+-                if (config.TryWrite(SandboxConfiguration.DefaultPath))
+-                {
+-                    Log.Information("Wrote a sandbox configuration to {Path}", SandboxConfiguration.DefaultPath);
+-                }
+-                else
+-                {
+-                    Log.Warning(
+-                        "Not writing a sandbox configuration, {Path} already exists. Delete it first if you want a fresh one.",
+-                        SandboxConfiguration.DefaultPath);
+-                }
+-            }
+-
+-            var layout = BuildSandboxLayout(startInfo, config, gamePath);
+-
+-            using var ctx = AppContainerHelper.CreateContext(
+-                layout.Config.ContainerName,
+-                "Dalamud",
+-                "FFXIV running under Dalamud's AppContainer sandbox",
+-                layout.Config.Capabilities);
+-
+-            Log.Information(
+-                "[SANDBOX] AppContainer {Name} ({Sid})",
+-                layout.Config.ContainerName,
+-                ctx.ContainerSidString);
+-
+-            var denied = ApplySandboxGrants(layout, ctx, true);
+-
+-            if (layout.Config.LoopbackExempt)
+-                AppContainerHelper.TryAddLoopbackExemption(ctx);
+-
+-            if (denied.Count > 0)
+-            {
+-                Log.Error(
+-                    "Could not write the DACL on {Count} path(s):{Paths}",
+-                    denied.Count,
+-                    string.Concat(denied.Select(x => $"{Environment.NewLine}    {x.Path}")));
+-                Log.Error(
+-                    elevated
+-                        ? "This is unexpected while elevated and probably a bug. Check that the paths are not read-only or on a filesystem without ACL support."
+-                        : "Re-run this command from an elevated command prompt.");
+-                return -1;
+-            }
+-
+-            Log.Information("Sandbox preparation complete! You can now launch with --sandbox (no elevation needed).");
+-
+-            if (!config.EnabledGlobally)
+-            {
+-                Log.Information(
+-                    "Launches that don't pass --sandbox will still be unsandboxed. Set \"enabledGlobally\": true in {Path} to sandbox every launch.",
+-                    SandboxConfiguration.DefaultPath);
+-            }
+-
+-            return 0;
+-        }
+-
+-        private static bool PathsEqual(string? a, string? b)
+-        {
+-            if (a == null || b == null)
+-                return false;
+-
+-            return string.Equals(
+-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+-                StringComparison.OrdinalIgnoreCase);
+-        }
+-
+-        private static bool IsAtOrUnder(string? path, string? ancestor)
+-        {
+-            if (path == null || ancestor == null)
+-                return false;
+-
+-            if (PathsEqual(path, ancestor))
+-                return true;
+-
+-            var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+-            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ancestor)) + Path.DirectorySeparatorChar;
+-            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+-        }
+-
+-        private static void MigrateFileToSandbox(string source, string target)
+-        {
+-            try
+-            {
+-                if (!File.Exists(source) || File.Exists(target))
+-                    return;
+-
+-                File.Copy(source, target);
+-                Log.Information("[SANDBOX] Migrated {Source} to {Target}", source, target);
+-            }
+-            catch (Exception ex)
+-            {
+-                Log.Warning(ex, "[SANDBOX] Could not migrate {Source} to {Target}", source, target);
+-            }
+-        }
+-
+-        private static void MigrateDirectoryToSandbox(string source, string target)
+-        {
+-            try
+-            {
+-                if (!Directory.Exists(source) || Directory.Exists(target))
+-                    return;
+-
+-                static void CopyRecursively(DirectoryInfo from, DirectoryInfo to)
+-                {
+-                    foreach (var dir in from.GetDirectories())
+-                        CopyRecursively(dir, to.CreateSubdirectory(dir.Name));
+-
+-                    foreach (var file in from.GetFiles())
+-                        file.CopyTo(Path.Combine(to.FullName, file.Name));
+-                }
+-
+-                CopyRecursively(new DirectoryInfo(source), Directory.CreateDirectory(target));
+-                Log.Information("[SANDBOX] Migrated {Source} to {Target}", source, target);
+-            }
+-            catch (Exception ex)
+-            {
+-                Log.Warning(ex, "[SANDBOX] Could not migrate {Source} to {Target}", source, target);
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Determine the game path from the platform's launcher configuration.
+-        /// Logs and returns null when it could not be determined.
+-        /// </summary>
+-        private static string? ResolveGamePath(DalamudStartInfo dalamudStartInfo)
+-        {
+-            string? gamePath;
+-            try
+-            {
+-                if (dalamudStartInfo.Platform == OSPlatform.Windows)
+-                {
+-                    gamePath = FindGamePathFromLauncherConfig();
+-                    Log.Information("Using game installation path configuration from from XIVLauncher: {0}", gamePath);
+-                }
+-                else if (dalamudStartInfo.Platform == OSPlatform.Linux)
+-                {
+-                    var homeDir = $"Z:\\home\\{Environment.UserName}";
+-                    var xivlauncherDir = Path.Combine(homeDir, ".xlcore");
+-                    var launcherConfigPath = Path.Combine(xivlauncherDir, "launcher.ini");
+-                    var config = File.ReadAllLines(launcherConfigPath)
+-                        .Where(line => line.Contains('='))
+-                        .ToDictionary(line => line.Split('=')[0], line => line.Split('=')[1]);
+-                    gamePath = Path.Combine("Z:" + config["GamePath"].Replace('/', '\\'), "game", "ffxiv_dx11.exe");
+-                    Log.Information("Using game installation path configuration from from XIVLauncher.Core: {0}", gamePath);
+-                }
+-                else
+-                {
+-                    var homeDir = $"Z:\\Users\\{Environment.UserName}";
+-                    var xomlauncherDir = Path.Combine(homeDir, "Library", "Application Support", "XIV on Mac");
+-                    // we could try to parse the binary plist file here if we really wanted to...
+-                    gamePath = Path.Combine(xomlauncherDir, "ffxiv", "game", "ffxiv_dx11.exe");
+-                    Log.Information("Using default game installation path from XOM: {0}", gamePath);
+-                }
+-            }
+-            catch (Exception)
+-            {
+-                Log.Error("Failed to read launcher config to get the set-up game path, please specify one using -g");
+-                return null;
+-            }
+-
+-            if (gamePath == null)
+-            {
+-                Log.Error("Game path not specified and could not be determined from launcher config, please specify one using -g");
+-                return null;
+-            }
+-
+-            if (!File.Exists(gamePath))
+-            {
+-                Log.Error("File not found: {0}", gamePath);
+-                return null;
+-            }
+-
+-            return gamePath;
+-        }
+-
+-        private static string? FindGamePathFromLauncherConfig()
+-        {
+-            var appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+-            var xivlauncherDir = Path.Combine(appDataDir, "XIVLauncher");
+-            var launcherConfigPath = Path.Combine(xivlauncherDir, "launcherConfigV3.json");
+-
+-            if (!File.Exists(launcherConfigPath))
+-                return null;
+-
+-            var deserializedConfig = JsonSerializer.CreateDefault()
+-                                                   .Deserialize<Dictionary<string, string>>(
+-                                                       new JsonTextReader(
+-                                                           new StringReader(File.ReadAllText(launcherConfigPath))));
+-
+-            if (deserializedConfig == null)
+-                return null;
+-
+-            return Path.Combine(
+-                deserializedConfig["GamePath"],
+-                "game",
+-                "ffxiv_dx11.exe");
+-        }
+-
+-        private static unsafe Process GetInheritableCurrentProcessHandle()
+-        {
+-            var currentProcessHandle = new HANDLE(Process.GetCurrentProcess().Handle.ToPointer());
+-            var inheritableHandle = HANDLE.Null;
+-            if (!Windows.Win32.PInvoke.DuplicateHandle(
+-                    currentProcessHandle,
+-                    currentProcessHandle,
+-                    currentProcessHandle,
+-                    &inheritableHandle,
+-                    0,
+-                    true,
+-                    DUPLICATE_HANDLE_OPTIONS.DUPLICATE_SAME_ACCESS))
+-            {
+-                throw new Win32Exception("Failed to call DuplicateHandle");
+-            }
+-
+-            return new ExistingProcess(inheritableHandle);
+-        }
+-
+-        private static int ProcessLaunchTestCommand(List<string> args)
+-        {
+-            Console.WriteLine("Testing launch command.");
+-            args[0] = Process.GetCurrentProcess().MainModule!.FileName;
+-            args[1] = "launch";
+-
+-            var inheritableCurrentProcess = GetInheritableCurrentProcessHandle(); // so that it closes the handle when it's done
+-            args.Insert(2, $"--handle-owner={inheritableCurrentProcess.Handle}");
+-
+-            for (var i = 0; i < args.Count; i++)
+-                Console.WriteLine("Argument {0}: {1}", i, args[i]);
+-
+-            Process helperProcess = new();
+-            helperProcess.StartInfo.FileName = args[0];
+-            for (var i = 1; i < args.Count; i++)
+-                helperProcess.StartInfo.ArgumentList.Add(args[i]);
+-            helperProcess.StartInfo.RedirectStandardOutput = true;
+-            helperProcess.StartInfo.RedirectStandardError = true;
+-            helperProcess.StartInfo.UseShellExecute = false;
+-            helperProcess.ErrorDataReceived += new DataReceivedEventHandler((sendingProcess, errLine) => Console.WriteLine($"stderr: \"{errLine.Data}\""));
+-            helperProcess.Start();
+-            helperProcess.BeginErrorReadLine();
+-            helperProcess.WaitForExit();
+-            if (helperProcess.ExitCode != 0)
+-            {
+-                return -1;
+-            }
+-
+-            var result = JsonSerializer.CreateDefault().Deserialize<Dictionary<string, int>>(new JsonTextReader(helperProcess.StandardOutput));
+-            if (result == null)
+-                throw new Exception("Could not get result from game process");
+-
+-            var pid = result["pid"];
+-            var handle = (IntPtr)result["handle"];
+-            var resultProcess = new ExistingProcess(handle);
+-            Console.WriteLine("PID: {0}, Handle: {1}", pid, handle);
+-            Console.WriteLine("Press Enter to force quit");
+-            Console.ReadLine();
+-            resultProcess.Kill();
+-            return 0;
+-        }
+-
+         private static DalamudStartInfo AdjustStartInfo(DalamudStartInfo startInfo, string gamePath)
+         {
+-            var ffxivDir = Path.GetDirectoryName(gamePath) ?? throw new DirectoryNotFoundException($"Could not determine parent directory of {gamePath}.");
++            var ffxivDir = Path.GetDirectoryName(gamePath)
++                           ?? throw new DirectoryNotFoundException($"Could not determine parent directory of {gamePath}.");
+             var gameVerStr = File.ReadAllText(Path.Combine(ffxivDir, "ffxivgame.ver"));
+             var gameVer = GameVersion.Parse(gameVerStr);
+ 
+@@ -1545,77 +708,6 @@ namespace Dalamud.Injector
+             Log.Information("Done");
+         }
+ 
+-        [DllImport("Dalamud.Boot.dll")]
+-        private static extern int RewriteRemoteEntryPointW(IntPtr hProcess, [MarshalAs(UnmanagedType.LPWStr)] string gamePath, [MarshalAs(UnmanagedType.LPWStr)] string loadInfoJson);
+-
+-        /// <summary>
+-        ///     This routine appends the given argument to a command line such that
+-        ///     CommandLineToArgvW will return the argument string unchanged. Arguments
+-        ///     in a command line should be separated by spaces; this function does
+-        ///     not add these spaces.
+-        ///
+-        ///     Taken from https://stackoverflow.com/questions/5510343/escape-command-line-arguments-in-c-sharp
+-        ///     and https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way/.
+-        /// </summary>
+-        /// <param name="argument">Supplies the argument to encode.</param>
+-        /// <param name="force">
+-        ///     Supplies an indication of whether we should quote the argument even if it
+-        ///     does not contain any characters that would ordinarily require quoting.
+-        /// </param>
+-        private static string EncodeParameterArgument(string argument, bool force = false)
+-        {
+-            if (argument == null)
+-            {
+-                throw new ArgumentNullException(nameof(argument));
+-            }
+-
+-            // Unless we're told otherwise, don't quote unless we actually
+-            // need to do so --- hopefully avoid problems if programs won't
+-            // parse quotes properly
+-            if (force == false
+-                && argument.Length > 0
+-                && argument.IndexOfAny(" \t\n\v\"".ToCharArray()) == -1)
+-            {
+-                return argument;
+-            }
+-
+-            var quoted = new StringBuilder();
+-            quoted.Append('"');
+-
+-            var numberBackslashes = 0;
+-
+-            foreach (var chr in argument)
+-            {
+-                switch (chr)
+-                {
+-                    case '\\':
+-                        numberBackslashes++;
+-                        continue;
+-                    case '"':
+-                        // Escape all backslashes and the following
+-                        // double quotation mark.
+-                        quoted.Append('\\', (numberBackslashes * 2) + 1);
+-                        quoted.Append(chr);
+-                        break;
+-                    default:
+-                        // Backslashes aren't special here.
+-                        quoted.Append('\\', numberBackslashes);
+-                        quoted.Append(chr);
+-                        break;
+-                }
+-
+-                numberBackslashes = 0;
+-            }
+-
+-            // Escape all backslashes, but let the terminating
+-            // double quotation mark we add below be interpreted
+-            // as a metacharacter.
+-            quoted.Append('\\', numberBackslashes * 2);
+-            quoted.Append('"');
+-
+-            return quoted.ToString();
+-        }
+-
+         private class CommandLineException : Exception
+         {
+             public CommandLineException(string cause)
+@@ -1623,26 +715,5 @@ namespace Dalamud.Injector
+             {
+             }
+         }
+-
+-        private sealed record SandboxGrant(string Path, uint Access, bool Create);
+-
+-        private sealed record SandboxLayout(SandboxConfiguration Config, string TempDirectory, string RuntimeDirectory, List<SandboxGrant> Grants);
+-
+-        private sealed class SandboxPreparationRequiredException(List<string> paths, string containerName)
+-            : Exception(BuildMessage(paths, containerName))
+-        {
+-            private static string BuildMessage(List<string> paths, string containerName)
+-            {
+-                var exeName = Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "Dalamud.Injector";
+-                var sb = new StringBuilder();
+-                sb.AppendLine($"The sandbox ({containerName}) is missing filesystem permissions and they could not be granted:");
+-                foreach (var path in paths)
+-                    sb.AppendLine($" => {path}");
+-                sb.AppendLine();
+-                sb.AppendLine("Run this once from an elevated command prompt, then launch normally:");
+-                sb.Append($"    {exeName}.exe sandbox-prepare");
+-                return sb.ToString();
+-            }
+-        }
+     }
+ }
+diff --git a/Dalamud.Injector/SandboxConfiguration.cs b/Dalamud.Injector/SandboxConfiguration.cs
+deleted file mode 100644
+index 60c1f1edb..000000000
+--- a/Dalamud.Injector/SandboxConfiguration.cs
++++ /dev/null
+@@ -1,133 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.IO;
+-
+-using Newtonsoft.Json;
+-using Serilog;
+-
+-namespace Dalamud.Injector
+-{
+-    /// <summary>
+-    /// User configuration for the AppContainer sandbox, read by the injector before launching the game.
+-    /// </summary>
+-    internal sealed class SandboxConfiguration
+-    {
+-        /// <summary>
+-        /// Gets the default location of the sandbox configuration, read even when no sandbox arguments were
+-        /// passed on the command line.
+-        /// </summary>
+-        public static string DefaultPath => Path.Combine(
+-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+-            "XIVLauncher",
+-            "dalamudSandbox.json");
+-
+-        /// <summary>
+-        /// Gets or sets a value indicating whether the game should be launched in the sandbox without command line
+-        /// arguments.
+-        /// </summary>
+-        [JsonProperty("enabledGlobally")]
+-        public bool EnabledGlobally { get; set; }
+-
+-        /// <summary>
+-        /// Gets or sets the AppContainer profile name.
+-        /// </summary>
+-        [JsonProperty("containerName")]
+-        public string ContainerName { get; set; } = "dalamud.game";
+-
+-        /// <summary>
+-        /// Gets or sets the capabilities granted to the container token.
+-        /// </summary>
+-        [JsonProperty("capabilities", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+-        public List<string> Capabilities { get; set; } = ["internetClient", "privateNetworkClientServer"];
+-
+-        /// <summary>
+-        /// Gets or sets a value indicating whether the injector should try to allow localhost connections
+-        /// for the container.
+-        /// </summary>
+-        [JsonProperty("loopbackExempt")]
+-        public bool LoopbackExempt { get; set; }
+-
+-        /// <summary>
+-        /// Gets or sets additional paths the sandboxed process may access.
+-        /// </summary>
+-        [JsonProperty("allowedPaths")]
+-        public List<SandboxAllowedPath> AllowedPaths { get; set; } = new();
+-
+-        /// <summary>
+-        /// Load a configuration from the given path, or defaults if mustExist is false.
+-        /// </summary>
+-        /// <param name="path">Path to the JSON configuration file.</param>
+-        /// <param name="mustExist">Whether a missing file is an error.</param>
+-        /// <returns>The configuration.</returns>
+-        public static SandboxConfiguration Load(string path, bool mustExist)
+-        {
+-            if (!File.Exists(path))
+-            {
+-                if (mustExist)
+-                    throw new FileNotFoundException($"No sandbox configuration at {path}.", path);
+-
+-                Log.Verbose("[SANDBOX] No sandbox configuration at {Path}, using defaults", path);
+-                return new SandboxConfiguration();
+-            }
+-
+-            SandboxConfiguration? loaded;
+-            try
+-            {
+-                loaded = JsonConvert.DeserializeObject<SandboxConfiguration>(File.ReadAllText(path));
+-            }
+-            catch (Exception ex)
+-            {
+-                throw new InvalidDataException(
+-                    $"Could not read the sandbox configuration at {path}. " +
+-                    "Fix the file or pass --no-sandbox to launch without a sandbox.",
+-                    ex);
+-            }
+-
+-            if (loaded == null)
+-            {
+-                throw new InvalidDataException(
+-                    $"The sandbox configuration at {path} is empty. " +
+-                    "Fix the file or pass --no-sandbox to launch without a sandbox.");
+-            }
+-
+-            Log.Information("[SANDBOX] Loaded sandbox configuration from {Path}", path);
+-            return loaded;
+-        }
+-
+-        /// <summary>
+-        /// Write this configuration to the given path, unless a file is already there.
+-        /// </summary>
+-        /// <param name="path">Path to the JSON configuration file to create.</param>
+-        /// <returns>Whether the file was written.</returns>
+-        public bool TryWrite(string path)
+-        {
+-            if (File.Exists(path))
+-                return false;
+-
+-            var directory = Path.GetDirectoryName(path);
+-            if (!string.IsNullOrEmpty(directory))
+-                Directory.CreateDirectory(directory);
+-
+-            File.WriteAllText(path, JsonConvert.SerializeObject(this, Formatting.Indented));
+-            return true;
+-        }
+-
+-        /// <summary>
+-        /// An additional path grant for the sandboxed process.
+-        /// </summary>
+-        internal sealed class SandboxAllowedPath
+-        {
+-            /// <summary>
+-            /// Gets or sets the path. Environment variables (%VAR%) are expanded.
+-            /// </summary>
+-            [JsonProperty("path")]
+-            public string Path { get; set; } = string.Empty;
+-
+-            /// <summary>
+-            /// Gets or sets a value indicating whether write (modify) access is granted.
+-            /// </summary>
+-            [JsonProperty("write")]
+-            public bool Write { get; set; }
+-        }
+-    }
+-}
+diff --git a/lib/CoreCLR/boot.cpp b/lib/CoreCLR/boot.cpp
+index 04b839840..422bd2c9e 100644
+--- a/lib/CoreCLR/boot.cpp
++++ b/lib/CoreCLR/boot.cpp
+@@ -58,7 +58,7 @@ static wchar_t* GetRuntimePath()
+     }
+ 
+     std::filesystem::path fs_app_data(_appdata);
+-    runtime_path = _wcsdup(fs_app_data.append("XIVLauncher").append("runtime").c_str());
++    runtime_path = _wcsdup(fs_app_data.append("DalamudStandaloneCN").append("runtime").c_str());
+     if (std::filesystem::exists(runtime_path))
+         return runtime_path;
+     free(runtime_path);

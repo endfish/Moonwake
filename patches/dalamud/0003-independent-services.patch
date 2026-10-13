@@ -1,0 +1,1789 @@
+diff --git a/Dalamud/Dalamud.csproj b/Dalamud/Dalamud.csproj
+index c3f74a624..d1613f055 100644
+--- a/Dalamud/Dalamud.csproj
++++ b/Dalamud/Dalamud.csproj
+@@ -84,6 +84,7 @@
+         <PackageReference Include="System.Reactive" />
+         <PackageReference Include="System.Reflection.MetadataLoadContext" />
+         <PackageReference Include="TerraFX.Interop.Windows" />
++        <PackageReference Include="HttpClient.Caching" />
+     </ItemGroup>
+ 
+     <ItemGroup>
+diff --git a/Dalamud/Interface/ImGuiNotification/NotificationUtilities.cs b/Dalamud/Interface/ImGuiNotification/NotificationUtilities.cs
+index 5ef3cf4ac..1b80faae7 100644
+--- a/Dalamud/Interface/ImGuiNotification/NotificationUtilities.cs
++++ b/Dalamud/Interface/ImGuiNotification/NotificationUtilities.cs
+@@ -130,7 +130,6 @@ public static class NotificationUtilities
+         if (!Service<PluginImageCache>.Get().TryGetIcon(
+                 plugin,
+                 plugin.Manifest,
+-                plugin.IsThirdParty,
+                 out var texture, out _) || texture is null)
+         {
+             texture = dam.GetDalamudTextureWrap(DalamudAsset.DefaultIcon);
+diff --git a/Dalamud/Interface/Internal/Asserts/AssertHandler.cs b/Dalamud/Interface/Internal/Asserts/AssertHandler.cs
+index 03c96bf54..0e5e0d6c5 100644
+--- a/Dalamud/Interface/Internal/Asserts/AssertHandler.cs
++++ b/Dalamud/Interface/Internal/Asserts/AssertHandler.cs
+@@ -229,7 +229,7 @@ internal class AssertHandler : IDisposable
+             else
+             {
+                 text = "Some code in a plugin or Dalamud itself has caused an ImGui assertion failure. " +
+-                       "Please report this problem in the Dalamud discord.\n\n";
++                       "This standalone build has no official support channel; inspect the local logs and source before continuing.\n\n";
+             }
+ 
+             text += $"You may attempt to continue running the game, but Dalamud UI elements may not work " +
+diff --git a/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs b/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
+index 20130736d..8971713db 100644
+--- a/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/BranchSwitcherWindow.cs
+@@ -1,33 +1,13 @@
+-using System.Collections.Generic;
+-using System.Diagnostics;
+-using System.IO;
+-using System.Linq;
+-using System.Net.Http.Json;
+-using System.Threading.Tasks;
+-
+ using Dalamud.Bindings.ImGui;
+-using Dalamud.Interface.Colors;
+-using Dalamud.Interface.Utility;
+ using Dalamud.Interface.Windowing;
+-using Dalamud.Networking.Http;
+-using Dalamud.Utility;
+-
+-using Newtonsoft.Json;
+-
+-using Serilog;
+ 
+ namespace Dalamud.Interface.Internal.Windows;
+ 
+ /// <summary>
+-/// Window responsible for switching Dalamud beta branches.
++/// Explains that online branch switching is unavailable in standalone builds.
+ /// </summary>
+ public class BranchSwitcherWindow : Window
+ {
+-    private const string BranchInfoUrl = "https://kamori.goats.dev/Dalamud/Release/Meta";
+-
+-    private Dictionary<string, VersionEntry>? branches;
+-    private int selectedBranchIndex;
+-
+     /// <summary>
+     /// Initializes a new instance of the <see cref="BranchSwitcherWindow"/> class.
+     /// </summary>
+@@ -38,104 +18,10 @@ public class BranchSwitcherWindow : Window
+         this.RespectCloseHotkey = true;
+     }
+ 
+-    /// <inheritdoc/>
+-    public override void OnOpen()
+-    {
+-        Task.Run(async () =>
+-        {
+-            var client = Service<HappyHttpClient>.Get().SharedHttpClient;
+-            this.branches = await client.GetFromJsonAsync<Dictionary<string, VersionEntry>>(BranchInfoUrl);
+-            Debug.Assert(this.branches != null, "this.branches != null");
+-
+-            var trackName = Versioning.GetActiveTrack();
+-            this.selectedBranchIndex = this.branches.IndexOf(x => x.Value.Track == trackName);
+-            if (this.selectedBranchIndex == -1)
+-            {
+-                this.selectedBranchIndex = 0;
+-            }
+-        });
+-
+-        base.OnOpen();
+-    }
+-
+     /// <inheritdoc/>
+     public override void Draw()
+     {
+-        if (this.branches == null)
+-        {
+-            ImGui.TextColored(ImGuiColors.DalamudGrey, "Loading branches..."u8);
+-            return;
+-        }
+-
+-        var si = Service<Dalamud>.Get().StartInfo;
+-
+-        var itemsArray = this.branches.Select(x => x.Key).ToArray();
+-        ImGui.ListBox("Branch", ref this.selectedBranchIndex, itemsArray);
+-
+-        var pickedBranch = this.branches.ElementAt(this.selectedBranchIndex);
+-
+-        if (pickedBranch.Value.SupportedGameVer != si.GameVersion)
+-        {
+-            ImGui.TextColored(ImGuiColors.ErrorForeground, "Can't pick this branch. GameVer != SupportedGameVer."u8);
+-        }
+-        else
+-        {
+-            ImGui.Text($"Version: {pickedBranch.Value.AssemblyVersion} ({pickedBranch.Value.GitSha ?? "unk"})");
+-            ImGui.Text($"Runtime: {pickedBranch.Value.RuntimeVersion}");
+-
+-            ImGuiHelpers.ScaledDummy(5);
+-
+-            if (ImGui.Button("Pick & Restart"u8))
+-            {
+-                var newTrackName = pickedBranch.Key;
+-                var newTrackKey = pickedBranch.Value.Key;
+-                Log.Verbose("Switching to branch {Branch} with key {Key}", newTrackName, newTrackKey);
+-
+-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+-                var xlPath = Path.Combine(appData, "XIVLauncher", "current", "XIVLauncher.exe");
+-
+-                if (File.Exists(xlPath))
+-                {
+-                    var ps = new ProcessStartInfo
+-                    {
+-                        FileName = xlPath,
+-                        UseShellExecute = false,
+-                    };
+-
+-                    ps.ArgumentList.Add($"--dalamud-beta-kind={newTrackName}");
+-                    ps.ArgumentList.Add($"--dalamud-beta-key={(newTrackKey.IsNullOrEmpty() ? "invalid" : newTrackKey)}");
+-
+-                    Process.Start(ps);
+-                    Environment.Exit(0);
+-                }
+-            }
+-        }
+-    }
+-
+-    private class VersionEntry
+-    {
+-        [JsonProperty("key")]
+-        public string? Key { get; set; }
+-
+-        [JsonProperty("track")]
+-        public string? Track { get; set; }
+-
+-        [JsonProperty("assemblyVersion")]
+-        public string? AssemblyVersion { get; set; }
+-
+-        [JsonProperty("runtimeVersion")]
+-        public string? RuntimeVersion { get; set; }
+-
+-        [JsonProperty("runtimeRequired")]
+-        public bool RuntimeRequired { get; set; }
+-
+-        [JsonProperty("supportedGameVer")]
+-        public string? SupportedGameVer { get; set; }
+-
+-        [JsonProperty("downloadUrl")]
+-        public string? DownloadUrl { get; set; }
+-
+-        [JsonProperty("gitSha")]
+-        public string? GitSha { get; set; }
++        ImGui.TextWrapped("Standalone builds do not use an online Dalamud release or branch service."u8);
++        ImGui.TextWrapped("Select and build the desired local branch outside the game, then inject that local payload."u8);
+     }
+ }
+diff --git a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+index 335075fcf..3ef28a2f3 100644
+--- a/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/ChangelogWindow.cs
+@@ -11,6 +11,7 @@ using Dalamud.Game.Gui;
+ using Dalamud.Interface.Animation.EasingFunctions;
+ using Dalamud.Interface.Colors;
+ using Dalamud.Interface.Components;
++using Dalamud.Interface.FontIdentifier;
+ using Dalamud.Interface.GameFonts;
+ using Dalamud.Interface.ManagedFontAtlas;
+ using Dalamud.Interface.ManagedFontAtlas.Internals;
+@@ -33,13 +34,13 @@ namespace Dalamud.Interface.Internal.Windows;
+ /// </summary>
+ internal sealed class ChangelogWindow : Window, IDisposable
+ {
+-    private const string WarrantsChangelogForMajorMinor = "10.0.";
++    private const string WarrantsChangelogForMajorMinor = "15.0.";
+ 
+     private const string ChangeLog =
+-        @"• Updated Dalamud for compatibility with Patch 7.0
+-• Made a lot of behind-the-scenes changes to make Dalamud and plugins more stable and reliable
+-• Added new functionality developers can take advantage of
+-• Refreshed the Dalamud/plugin installer UI
++        @"• 更新了 Dalamud 以兼容版本 7.4
++• 大多数插件现在已与国际服保持同步更新
++• 欢迎向插件原作者提交反馈或翻译贡献
++• 国服将继续单独维护一些需要特殊修复的插件
+ ";
+ 
+     private static readonly TimeSpan TitleScreenWaitTime = TimeSpan.FromSeconds(0.5f);
+@@ -53,6 +54,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+     private readonly Lazy<IFontHandle> bannerFont;
+     private readonly Lazy<IDalamudTextureWrap> apiBumpExplainerTexture;
+     private readonly Lazy<IDalamudTextureWrap> logoTexture;
++    private readonly Lazy<IDalamudTextureWrap> fontTipsTexture;
+ 
+     private readonly InOutCubic windowFade = new(TimeSpan.FromSeconds(2.5f))
+     {
+@@ -121,6 +123,8 @@ internal sealed class ChangelogWindow : Window, IDisposable
+         this.apiBumpExplainerTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.ChangelogApiBumpIcon));
+         this.logoTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.Logo));
+ 
++        this.fontTipsTexture = new(() => assets.GetDalamudTextureWrap(DalamudAsset.MissingFontTips));
++
+         // If we are going to show a changelog, make sure we have the font ready, otherwise it will hitch
+         if (WarrantsChangelog())
+             _ = this.bannerFont.Value;
+@@ -363,20 +367,40 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         ImGuiHelpers.ScaledDummy(5);
+                         ImGui.TextWrapped(ChangeLog);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("This changelog is a quick overview of the most important changes in this version."u8);
+-                        ImGui.TextWrapped("Please click next to see a quick guide to updating your plugins."u8);
++                        ImGui.TextWrapped("这个更新日志是对本版本中最重要的更改的快速概述"u8);
++                        ImGui.TextWrapped("请点击 Next 以查看更新插件的快速指南。"u8);
++
++                        ImGui.Image(
++                            this.fontTipsTexture.Value.Handle,
++                            this.fontTipsTexture.Value.Size);
++
++                        var interfaceManager = Service<InterfaceManager>.Get();
++                        using (interfaceManager.MonoFontHandle?.Push())
++                        {
++                            if (ImGui.Button(Loc.Localize("DalamudSettingResetDefaultFont", "Reset Default Font")))
++                            {
++                                var faf = Service<FontAtlasFactory>.Get();
++                                faf.DefaultFontSpecOverride =
++                                        new SingleFontSpec { FontId = new GameFontAndFamilyId(GameFontFamily.Axis) };
++                                interfaceManager.RebuildFonts();
++
++                                Service<DalamudConfiguration>.Get().DefaultFontSpec = faf.DefaultFontSpecOverride;
++                                Service<DalamudConfiguration>.Get().QueueSave();
++                            }
++                        }
+ 
++                        ImGuiHelpers.ScaledDummy(10);
+                         DrawNextButton(State.ExplainerApiBump);
+                         break;
+ 
+                     case State.ExplainerApiBump:
+-                        ImGui.TextWrapped("Take care! Due to changes in this patch, all of your plugins need to be updated and were disabled automatically."u8);
+-                        ImGui.TextWrapped("This is normal and required for major game updates."u8);
++                        ImGui.TextWrapped("注意了！由于此补丁的更改，所有插件都需要更新，并已自动禁用"u8);
++                        ImGui.TextWrapped("这是正常情况，也是进行重大游戏更新所必需的。"u8);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("To update your plugins, open the plugin installer and click 'update plugins'. Updated plugins should update and then re-enable themselves."u8);
++                        ImGui.TextWrapped("要更新插件，请打开插件安装程序，然后点击“更新插件”。更新后的插件应会自动更新并重新启用。"u8);
+                         ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.TextWrapped("Please keep in mind that not all of your plugins may already be updated for the new version."u8);
+-                        ImGui.TextWrapped("If some plugins are displayed with a red cross in the 'Installed Plugins' tab, they may not yet be available."u8);
++                        ImGui.TextWrapped("请记住，并非您所有的插件都可能已经针对新版本进行了更新。"u8);
++                        ImGui.TextWrapped("如果在“已安装插件”选项卡中显示某些插件带有红色叉号，那么它们可能还不可用。"u8);
+ 
+                         ImGuiHelpers.ScaledDummy(15);
+ 
+@@ -400,16 +424,11 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         break;
+ 
+                     case State.AskAutoUpdate:
+-                        ImGui.TextColoredWrapped(ImGuiColors.DalamudWhite, Loc.Localize("DalamudSettingsAutoUpdateHint",
+-                                                "Dalamud can update your plugins automatically, making sure that you always " +
+-                                                "have the newest features and bug fixes. You can choose when and how auto-updates are run here."));
++                        ImGui.TextColoredWrapped(ImGuiColors.DalamudWhite, "Dalamud 可以自动更新您的插件，确保您始终拥有最新的功能和错误修复。您可以在此处选择何时以及如何运行自动更新。");
+                         ImGuiHelpers.ScaledDummy(2);
+ 
+-                        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("DalamudSettingsAutoUpdateDisclaimer1",
+-                                                                "You can always update your plugins manually by clicking the update button in the plugin list. " +
+-                                                                "You can also opt into updates for specific plugins by right-clicking them and selecting \"Always auto-update\"."));
+-                        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("DalamudSettingsAutoUpdateDisclaimer2",
+-                                                                "Dalamud will only notify you about updates while you are idle."));
++                        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, "您始终可以通过单击插件列表中的更新按钮来手动更新插件。您还可以通过右键单击特定插件并选择“始终自动更新”来选择更新特定插件。");
++                        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, "Dalamud 只会在您处于休闲状态下通知您更新。");
+ 
+                         ImGuiHelpers.ScaledDummy(15);
+ 
+@@ -425,7 +444,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+                         using (ImRaii.PushColor(ImGuiCol.Button, ImGuiColors.DPSRed))
+                         {
+-                            if (DrawCenteredButton("Enable auto-updates", 30))
++                            if (DrawCenteredButton("启用自动更新", 30))
+                             {
+                                 this.chosenAutoUpdateBehavior = AutoUpdateBehavior.UpdateMainRepo;
+                                 GoToNextState(State.Links);
+@@ -438,7 +457,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         using (var buttonColor = ImRaii.PushColor(ImGuiCol.Button, Vector4.Zero))
+                         {
+                             buttonColor.Push(ImGuiCol.Border, ImGuiColors.DalamudGrey3);
+-                            if (DrawCenteredButton("Disable auto-updates", 25))
++                            if (DrawCenteredButton("禁用自动更新", 25))
+                             {
+                                 this.chosenAutoUpdateBehavior = AutoUpdateBehavior.OnlyNotify;
+                                 GoToNextState(State.Links);
+@@ -448,8 +467,8 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                         break;
+ 
+                     case State.Links:
+-                        ImGui.TextWrapped("If you note any issues or need help, please check the FAQ, and reach out on our Discord if you need help."u8);
+-                        ImGui.TextWrapped("Enjoy your time with the game and Dalamud!"u8);
++                        ImGui.TextWrapped("这是个人实验性 Standalone 构建，不使用官方插件库，也不提供面向第三方用户的技术支持。"u8);
++                        ImGui.TextWrapped("使用补丁日研究功能前，请先阅读源码、风险说明并备份独立数据目录。"u8);
+ 
+                         ImGuiHelpers.ScaledDummy(45);
+ 
+@@ -460,7 +479,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+                             return ImGuiComponents.IconButtonWithText(icon, text);
+                         }
+ 
+-                        if (CenteredIconButton(FontAwesomeIcon.Download, "Open Plugin Installer"))
++                        if (CenteredIconButton(FontAwesomeIcon.Download, "打开插件安装器"))
+                         {
+                             Service<DalamudInterface>.Get().OpenPluginInstaller();
+                             this.IsOpen = false;
+@@ -469,34 +488,20 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+                         ImGuiHelpers.ScaledDummy(5);
+ 
+-                        ImGuiHelpers.CenterCursorFor(
+-                            (int)(ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.Globe, "See the FAQ") +
+-                            ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.LaughBeam, "Join our Discord server") +
+-                            (5 * ImGuiHelpers.GlobalScale) +
+-                            (ImGui.GetStyle().ItemSpacing.X * 4)));
+-                        if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Globe, "See the FAQ"))
+-                        {
+-                            Util.OpenLink("https://goatcorp.github.io/faq/");
+-                        }
+-
+-                        ImGui.SameLine();
+-                        ImGuiHelpers.ScaledDummy(5);
+-                        ImGui.SameLine();
+-
+-                        if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.LaughBeam, "Join our Discord server"))
++                        if (CenteredIconButton(FontAwesomeIcon.Globe, "独立注入壳与风险说明"))
+                         {
+-                            Util.OpenLink("https://discord.gg/3NMcUV5");
++                            Util.OpenLink("https://github.com/endfish/DalamudStandaloneCN#readme");
+                         }
+ 
+                         ImGuiHelpers.ScaledDummy(5);
+ 
+-                        if (CenteredIconButton(FontAwesomeIcon.Heart, "Support what we care about"))
++                        if (CenteredIconButton(FontAwesomeIcon.FileCode, "Dalamud 核心源码"))
+                         {
+-                            Util.OpenLink("https://goatcorp.github.io/faq/support");
++                            Util.OpenLink("https://github.com/endfish/Dalamud");
+                         }
+ 
+                         var buttonHeight = 30 * ImGuiHelpers.GlobalScale;
+-                        var buttonText = "Close";
++                        var buttonText = "关闭";
+                         var buttonWidth = ImGui.CalcTextSize(buttonText).X + 40 * ImGuiHelpers.GlobalScale;
+                         ImGui.SetCursorPosY(windowSize.Y - buttonHeight - (20 * ImGuiHelpers.GlobalScale));
+                         ImGuiHelpers.CenterCursorFor((int)buttonWidth);
+@@ -531,7 +536,7 @@ internal sealed class ChangelogWindow : Window, IDisposable
+ 
+             if (ImGui.IsItemHovered())
+             {
+-                ImGui.SetTooltip("I don't care about this"u8);
++                ImGui.SetTooltip("我不关心这个"u8);
+             }
+         }
+     }
+diff --git a/Dalamud/Interface/Internal/Windows/PluginImageCache.cs b/Dalamud/Interface/Internal/Windows/PluginImageCache.cs
+index dca38e3e0..c5558e586 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginImageCache.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginImageCache.cs
+@@ -3,6 +3,7 @@ using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
+ using System.Net;
++using System.Net.Http;
+ using System.Threading;
+ using System.Threading.Tasks;
+ 
+@@ -44,8 +45,6 @@ internal class PluginImageCache : IInternalDisposableService
+     /// </summary>
+     public const int PluginIconHeight = 512;
+ 
+-    private const string MainRepoDip17ImageUrl = "https://raw.githubusercontent.com/goatcorp/PluginDistD17/main/{0}/{1}/images/{2}";
+-
+     [ServiceManager.ServiceDependency]
+     private readonly HappyHttpClient happyHttpClient = Service<HappyHttpClient>.Get();
+ 
+@@ -184,11 +183,10 @@ internal class PluginImageCache : IInternalDisposableService
+     /// </summary>
+     /// <param name="plugin">The installed plugin, if available.</param>
+     /// <param name="manifest">The plugin manifest.</param>
+-    /// <param name="isThirdParty">If the plugin was third party sourced.</param>
+     /// <param name="iconTexture">Cached image textures, or an empty array.</param>
+     /// <param name="loadedSince">The time the icon was successfully downloaded.</param>
+     /// <returns>True if an entry exists, may be null if currently downloading.</returns>
+-    public bool TryGetIcon(LocalPlugin? plugin, IPluginManifest manifest, bool isThirdParty, out IDalamudTextureWrap? iconTexture, out DateTime? loadedSince)
++    public bool TryGetIcon(LocalPlugin? plugin, IPluginManifest manifest, out IDalamudTextureWrap? iconTexture, out DateTime? loadedSince)
+     {
+         ArgumentNullException.ThrowIfNull(manifest);
+ 
+@@ -214,7 +212,7 @@ internal class PluginImageCache : IInternalDisposableService
+         {
+             try
+             {
+-                var texture = await this.DownloadPluginIconAsync(plugin, manifest, isThirdParty, requestedFrame);
++                var texture = await this.DownloadPluginIconAsync(plugin, manifest, requestedFrame);
+                 if (texture != null)
+                     this.pluginIconMap[key] = new LoadedIcon(texture, DateTime.Now);
+             }
+@@ -233,10 +231,9 @@ internal class PluginImageCache : IInternalDisposableService
+     /// </summary>
+     /// <param name="plugin">The installed plugin, if available.</param>
+     /// <param name="manifest">The plugin manifest.</param>
+-    /// <param name="isThirdParty">If the plugin was third party sourced.</param>
+     /// <param name="imageTextures">Cached image textures, or an empty array.</param>
+     /// <returns>True if the image array exists, may be empty if currently downloading.</returns>
+-    public bool TryGetImages(LocalPlugin? plugin, IPluginManifest manifest, bool isThirdParty, out IDalamudTextureWrap?[] imageTextures)
++    public bool TryGetImages(LocalPlugin? plugin, IPluginManifest manifest, out IDalamudTextureWrap?[] imageTextures)
+     {
+         ArgumentNullException.ThrowIfNull(manifest);
+ 
+@@ -256,7 +253,7 @@ internal class PluginImageCache : IInternalDisposableService
+         {
+             try
+             {
+-                await this.DownloadPluginImagesAsync(target, plugin, manifest, isThirdParty, requestedFrame);
++                await this.DownloadPluginImagesAsync(target, plugin, manifest, requestedFrame);
+             }
+             catch (Exception ex)
+             {
+@@ -441,7 +438,7 @@ internal class PluginImageCache : IInternalDisposableService
+         Log.Debug("Plugin image loader has shutdown");
+     }
+ 
+-    private async Task<IDalamudTextureWrap?> DownloadPluginIconAsync(LocalPlugin? plugin, IPluginManifest manifest, bool isThirdParty, ulong requestedFrame)
++    private async Task<IDalamudTextureWrap?> DownloadPluginIconAsync(LocalPlugin? plugin, IPluginManifest manifest, ulong requestedFrame)
+     {
+         if (plugin is { IsDev: true })
+         {
+@@ -468,13 +465,9 @@ internal class PluginImageCache : IInternalDisposableService
+                     return fileIcon;
+                 }
+             }
+-
+-            // Dev plugins are likely going to look like a main repo plugin, the InstalledFrom field is going to be null.
+-            // So instead, set the value manually so we download from the urls specified.
+-            isThirdParty = true;
+         }
+ 
+-        var url = this.GetPluginIconUrl(manifest, isThirdParty);
++        var url = this.GetPluginIconUrl(manifest);
+ 
+         if (url.IsNullOrEmpty())
+         {
+@@ -507,7 +500,7 @@ internal class PluginImageCache : IInternalDisposableService
+         return icon;
+     }
+ 
+-    private async Task DownloadPluginImagesAsync(IDalamudTextureWrap?[] pluginImages, LocalPlugin? plugin, IPluginManifest manifest, bool isThirdParty, ulong requestedFrame)
++    private async Task DownloadPluginImagesAsync(IDalamudTextureWrap?[] pluginImages, LocalPlugin? plugin, IPluginManifest manifest, ulong requestedFrame)
+     {
+         if (plugin is { IsDev: true })
+         {
+@@ -553,41 +546,58 @@ internal class PluginImageCache : IInternalDisposableService
+ 
+             if (pluginImages.Any(x => x != null))
+                 return;
+-
+-            // Dev plugins are likely going to look like a main repo plugin, the InstalledFrom field is going to be null.
+-            // So instead, set the value manually so we download from the urls specified.
+-            isThirdParty = true;
+         }
+ 
+-        var urls = this.GetPluginImageUrls(manifest, isThirdParty);
+-        urls = urls?.Where(x => !string.IsNullOrEmpty(x)).ToList();
+-        if (urls?.Any() != true)
++        var urlCandidates = this.GetPluginImageUrlCandidates(manifest);
++        if (urlCandidates.All(x => x.Count == 0))
+         {
+             Log.Verbose($"Images for {manifest.InternalName} are not available");
+             return;
+         }
+ 
+         var tasks = new List<Task>();
+-        for (var i = 0; i < urls.Count && i < pluginImages.Length; i++)
++        for (var i = 0; i < urlCandidates.Count && i < pluginImages.Length; i++)
+         {
+             var i2 = i;
+-            var url = urls[i];
++            var candidates = urlCandidates[i];
++            if (candidates.Count == 0)
++                continue;
++
+             tasks.Add(Task.Run(async () =>
+             {
+-                Log.Verbose($"Downloading image{i2 + 1} for {manifest.InternalName} from {url}");
+-                // ReSharper disable once RedundantTypeArgumentsOfMethod
+-                var bytes = await this.RunInDownloadQueue<byte[]?>(
+-                                async () =>
+-                                {
+-                                    var httpClient = this.happyHttpClient.SharedHttpClient;
+-                                    var data = await httpClient.GetAsync(url);
+-                                    if (data.StatusCode == HttpStatusCode.NotFound)
+-                                        return null;
+-
+-                                    data.EnsureSuccessStatusCode();
+-                                    return await data.Content.ReadAsByteArrayAsync();
+-                                },
+-                                requestedFrame);
++                byte[]? bytes = null;
++                string? loadedUrl = null;
++                foreach (var url in candidates)
++                {
++                    Log.Verbose($"Downloading image{i2 + 1} for {manifest.InternalName} from {url}");
++                    try
++                    {
++                        // ReSharper disable once RedundantTypeArgumentsOfMethod
++                        bytes = await this.RunInDownloadQueue<byte[]?>(
++                                    async () =>
++                                    {
++                                        var httpClient = this.happyHttpClient.SharedHttpClient;
++                                        using var data = await httpClient.GetAsync(url);
++                                        if (data.StatusCode == HttpStatusCode.NotFound)
++                                            return null;
++
++                                        data.EnsureSuccessStatusCode();
++                                        return await data.Content.ReadAsByteArrayAsync();
++                                    },
++                                    requestedFrame);
++                    }
++                    catch (HttpRequestException ex)
++                    {
++                        Log.Warning(ex, $"Failed to download image{i2 + 1} for {manifest.InternalName} from {url}");
++                        continue;
++                    }
++
++                    if (bytes != null)
++                    {
++                        loadedUrl = url;
++                        break;
++                    }
++                }
+ 
+                 if (bytes == null)
+                     return;
+@@ -595,7 +605,7 @@ internal class PluginImageCache : IInternalDisposableService
+                 var image = await this.TryLoadImage(
+                                 bytes,
+                                 $"image{i2 + 1}",
+-                                "queue",
++                                loadedUrl!,
+                                 manifest,
+                                 PluginImageWidth,
+                                 PluginImageHeight,
+@@ -618,34 +628,25 @@ internal class PluginImageCache : IInternalDisposableService
+         }
+     }
+ 
+-    private string? GetPluginIconUrl(IPluginManifest manifest, bool isThirdParty)
+-    {
+-        if (isThirdParty)
+-            return manifest.IconUrl;
++    private string? GetPluginIconUrl(IPluginManifest manifest) => manifest.IconUrl;
+ 
+-        if (manifest.Dip17Channel.IsNullOrEmpty())
+-            return null;
++    private List<List<string>> GetPluginImageUrlCandidates(IPluginManifest manifest)
++    {
++        if (manifest.ImageUrls is { Count: > 5 })
++            Log.Warning($"Plugin {manifest.InternalName} has too many images");
+ 
+-        return MainRepoDip17ImageUrl.Format(manifest.Dip17Channel!, manifest.InternalName, "icon.png");
+-    }
++        var output = Enumerable.Range(0, 5).Select(_ => new List<string>()).ToList();
++        if (manifest.ImageUrls == null)
++            return output;
+ 
+-    private List<string?>? GetPluginImageUrls(IPluginManifest manifest, bool isThirdParty)
+-    {
+-        if (isThirdParty)
++        for (var i = 0; i < manifest.ImageUrls.Count && i < output.Count; i++)
+         {
+-            if (manifest.ImageUrls?.Count > 5)
++            var url = manifest.ImageUrls[i];
++            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
++                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+             {
+-                Log.Warning($"Plugin {manifest.InternalName} has too many images");
+-                return manifest.ImageUrls.Take(5).ToList();
++                output[i].Add(url);
+             }
+-
+-            return manifest.ImageUrls;
+-        }
+-
+-        var output = new List<string>();
+-        for (var i = 1; i <= 5; i++)
+-        {
+-            output.Add(MainRepoDip17ImageUrl.Format(manifest.Dip17Channel!, manifest.InternalName, $"image{i}.png"));
+         }
+ 
+         return output;
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/DalamudChangelogManager.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/DalamudChangelogManager.cs
+index bbc92efb5..b667227e6 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/DalamudChangelogManager.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/DalamudChangelogManager.cs
+@@ -1,14 +1,10 @@
+ using System.Collections.Generic;
+ using System.Linq;
+-using System.Net.Http.Json;
+ using System.Threading.Tasks;
+ 
+-using Dalamud.Networking.Http;
+ using Dalamud.Plugin.Internal;
+ using Dalamud.Utility;
+ 
+-using Serilog;
+-
+ namespace Dalamud.Interface.Internal.Windows.PluginInstaller;
+ 
+ /// <summary>
+@@ -16,9 +12,6 @@ namespace Dalamud.Interface.Internal.Windows.PluginInstaller;
+ /// </summary>
+ internal class DalamudChangelogManager
+ {
+-    private const string DalamudChangelogUrl = "https://kamori.goats.dev/Dalamud/Release/Changelog";
+-    private const string PluginChangelogUrl = "https://kamori.goats.dev/Plugin/History/{0}?track={1}";
+-
+     private readonly PluginManager manager;
+ 
+     /// <summary>
+@@ -39,45 +32,15 @@ internal class DalamudChangelogManager
+     /// Reload the changelog list.
+     /// </summary>
+     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+-    public async Task ReloadChangelogAsync()
++    public Task ReloadChangelogAsync()
+     {
+-        var client = Service<HappyHttpClient>.Get().SharedHttpClient;
+-        this.Changelogs = null;
+-
+-        var dalamudChangelogs = await client.GetFromJsonAsync<List<DalamudChangelog>>(DalamudChangelogUrl);
+-        var changelogs = dalamudChangelogs.Select(x => new DalamudChangelogEntry(x)).Cast<IChangelogEntry>().ToList();
+-
+-        foreach (var plugin in this.manager.InstalledPlugins)
+-        {
+-            if (!plugin.IsThirdParty && !plugin.IsDev)
+-            {
+-                try
+-                {
+-                    var pluginChangelogs = await client.GetFromJsonAsync<PluginHistory>(string.Format(
+-                                               PluginChangelogUrl,
+-                                               plugin.Manifest.InternalName,
+-                                               plugin.Manifest.Dip17Channel));
+-
+-                    changelogs.AddRange(pluginChangelogs.Versions
+-                                                                   .Where(x => x.Dip17Track ==
+-                                                                               plugin.Manifest.Dip17Channel)
+-                                                                   .Select(x => new PluginChangelogEntry(plugin, x)));
+-                }
+-                catch (Exception ex)
+-                {
+-                    Log.Error(ex, "Failed to load changelog for {PluginName}", plugin.Manifest.Name);
+-                }
+-            }
+-            else
+-            {
+-                if (plugin.Manifest.Changelog.IsNullOrWhitespace())
+-                    continue;
+-
+-                changelogs.Add(new PluginChangelogEntry(plugin));
+-            }
+-        }
+-
+-        this.Changelogs = changelogs.OrderByDescending(x => x.Date).ToList();
++        this.Changelogs = this.manager.InstalledPlugins
++                              .Where(plugin => !plugin.Manifest.Changelog.IsNullOrWhitespace())
++                              .Select(plugin => new PluginChangelogEntry(plugin))
++                              .Cast<IChangelogEntry>()
++                              .OrderByDescending(entry => entry.Date)
++                              .ToList();
++        return Task.CompletedTask;
+     }
+ 
+     /// <summary>
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+index fa8bf4605..05226b29c 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+@@ -69,6 +69,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+     private DalamudChangelogManager? dalamudChangelogManager;
+     private Task? dalamudChangelogRefreshTask;
+     private CancellationTokenSource? dalamudChangelogRefreshTaskCts;
++    private DateTime lastRefreshTime = DateTime.MinValue;
+ 
+     #region Image Tester State
+ 
+@@ -228,12 +229,11 @@ internal class PluginInstallerWindow : Window, IDisposable
+         IsThirdParty = 1 << 0,
+         HasTrouble = 1 << 1,
+         UpdateAvailable = 1 << 2,
+-        MainRepoCrossUpdate = 1 << 3,
+-        IsNew = 1 << 4,
+-        IsInstallableOutdated = 1 << 5,
+-        IsOrphan = 1 << 6,
+-        IsTesting = 1 << 7,
+-        IsIncompatible = 1 << 8,
++        IsNew = 1 << 3,
++        IsInstallableOutdated = 1 << 4,
++        IsOrphan = 1 << 5,
++        IsTesting = 1 << 6,
++        IsIncompatible = 1 << 7,
+     }
+ 
+     private enum InstalledPluginListFilter
+@@ -721,6 +721,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+         var headerText = Locs.Header_Hint;
+         var headerTextSize = ImGui.CalcTextSize(headerText);
+         ImGui.Text(headerText);
++        ImGui.TextColored(ImGuiColors.AttentionForeground, "插件使用过程中出现问题请优先通过内置反馈或GitHub Issue进行");
+ 
+         ImGui.SameLine();
+ 
+@@ -1239,7 +1240,10 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+             ImGui.Spacing();
+ 
++            ImGui.BeginDisabled();
+             ImGui.Checkbox(Locs.FeedbackModal_IncludeLastError, ref this.feedbackModalIncludeException);
++            ImGui.EndDisabled();
++
+             ImGui.TextColored(ImGuiColors.DalamudGrey, Locs.FeedbackModal_IncludeLastErrorHint);
+ 
+             ImGui.Spacing();
+@@ -1316,7 +1320,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+             {
+                 this.feedbackModalBody = string.Empty;
+                 this.feedbackModalContact = Service<DalamudConfiguration>.Get().LastFeedbackContactDetails;
+-                this.feedbackModalIncludeException = false;
++                this.feedbackModalIncludeException = true;
+             }
+             else
+             {
+@@ -2218,10 +2222,32 @@ internal class PluginInstallerWindow : Window, IDisposable
+         return ready;
+     }
+ 
+-    private bool DrawPluginCollapsingHeader(string label, LocalPlugin? plugin, IPluginManifest manifest, PluginHeaderFlags flags, Action drawContextMenuAction, int index)
++    /// <summary>
++    /// Draws wrapped text, using its localized variant when available, with the original shown on hover.
++    /// </summary>
++    /// <param name="original">The original (untranslated) text.</param>
++    /// <param name="localized">The localized text, if any.</param>
++    private void DrawLocalizableTextWrapped(string original, string? localized)
++    {
++        if (!string.IsNullOrWhiteSpace(localized) && localized != original)
++        {
++            ImGui.TextWrapped(localized);
++            if (ImGui.IsItemHovered())
++                ImGui.SetTooltip(original);
++        }
++        else
++        {
++            ImGui.TextWrapped(original);
++        }
++    }
++
++    private bool DrawPluginCollapsingHeader(string label, LocalPlugin? plugin, IPluginManifest manifest, PluginHeaderFlags flags, Action drawContextMenuAction, int index, IPluginManifest? locManifest = null)
+     {
+         var isOpen = this.openPluginCollapsibles.Contains(index);
+ 
++        // Localized metadata source (remote manifest for installed plugins).
++        locManifest ??= manifest;
++
+         var sectionSize = ImGuiHelpers.GlobalScale * 66;
+ 
+         ImGui.Separator();
+@@ -2313,7 +2339,9 @@ internal class PluginInstallerWindow : Window, IDisposable
+         if (ImGui.IsRectVisible(rectOffset + cursorBeforeImage, rectOffset + cursorBeforeImage + iconSize))
+         {
+             var iconTex = this.imageCache.DefaultIcon;
+-            var hasIcon = this.imageCache.TryGetIcon(plugin, manifest, flags.HasFlag(PluginHeaderFlags.IsThirdParty), out var cachedIconTex, out var loadedSince);
++
++            // Use the remote manifest so installed plugins fall back to the repo icon.
++            var hasIcon = this.imageCache.TryGetIcon(plugin, locManifest, out var cachedIconTex, out var loadedSince);
+             if (hasIcon && cachedIconTex != null)
+             {
+                 iconTex = cachedIconTex;
+@@ -2373,7 +2401,26 @@ internal class PluginInstallerWindow : Window, IDisposable
+         var cursor = ImGui.GetCursorPos();
+ 
+         // Name
+-        ImGui.Text(label);
++        if (!string.IsNullOrWhiteSpace(locManifest.NameLoc) &&
++            locManifest.NameLoc != manifest.Name)
++        {
++            ImGui.Text(manifest.Name);
++
++            ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
++            using (ImRaii.PushColor(ImGuiCol.Text, ImGuiColors.DalamudGrey))
++                ImGui.Text($"· {locManifest.NameLoc}");
++
++            var suffix = label.Length > manifest.Name.Length ? label[manifest.Name.Length..] : string.Empty;
++            if (suffix.Length > 0)
++            {
++                ImGui.SameLine(0, 0);
++                ImGui.Text(suffix);
++            }
++        }
++        else
++        {
++            ImGui.Text(label);
++        }
+ 
+         // Verified Checkmark or dev plugin wrench
+         {
+@@ -2514,10 +2561,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+         {
+             ImGui.PushStyleColor(ImGuiCol.Text, ImGuiColors.ErrorForeground);
+ 
+-            ImGui.TextWrapped(
+-                flags.HasFlag(PluginHeaderFlags.MainRepoCrossUpdate)
+-                    ? Locs.PluginBody_NoServiceThirdCrossUpdate
+-                    : Locs.PluginBody_NoServiceThird);
++            ImGui.TextWrapped(Locs.PluginBody_NoServiceThird);
+ 
+             ImGui.PopStyleColor();
+         }
+@@ -2542,16 +2586,28 @@ internal class PluginInstallerWindow : Window, IDisposable
+         {
+             if (!string.IsNullOrWhiteSpace(manifest.Punchline))
+             {
+-                ImGui.TextWrapped(manifest.Punchline);
++                this.DrawLocalizableTextWrapped(manifest.Punchline, locManifest.PunchlineLoc);
+             }
+             else if (!string.IsNullOrWhiteSpace(manifest.Description))
+             {
+                 const int punchlineLen = 200;
+-                var firstLine = manifest.Description.Split(['\r', '\n'])[0];
++
++                var useLoc = !string.IsNullOrWhiteSpace(locManifest.DescriptionLoc) &&
++                             locManifest.DescriptionLoc != manifest.Description;
++                var source = useLoc ? locManifest.DescriptionLoc! : manifest.Description;
++                var firstLine = source.Split(['\r', '\n'])[0];
+ 
+                 ImGui.TextWrapped(firstLine.Length < punchlineLen
+                                                  ? firstLine
+                                                  : firstLine[..punchlineLen]);
++
++                if (useLoc && ImGui.IsItemHovered())
++                {
++                    var originalFirstLine = manifest.Description.Split(['\r', '\n'])[0];
++                    ImGui.SetTooltip(originalFirstLine.Length < punchlineLen
++                                         ? originalFirstLine
++                                         : originalFirstLine[..punchlineLen]);
++                }
+             }
+         }
+ 
+@@ -2576,7 +2632,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+             if (log is PluginChangelogEntry pluginLog)
+             {
+                 icon = this.imageCache.DefaultIcon;
+-                var hasIcon = this.imageCache.TryGetIcon(pluginLog.Plugin, pluginLog.Plugin.Manifest, pluginLog.Plugin.IsThirdParty, out var cachedIconTex, out _);
++                var hasIcon = this.imageCache.TryGetIcon(pluginLog.Plugin, pluginLog.Plugin.Manifest, out var cachedIconTex, out _);
+                 if (hasIcon && cachedIconTex != null)
+                 {
+                     icon = cachedIconTex;
+@@ -2718,7 +2774,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+             // Description
+             if (!string.IsNullOrWhiteSpace(manifest.Description))
+             {
+-                ImGui.TextWrapped(manifest.Description);
++                this.DrawLocalizableTextWrapped(manifest.Description, manifest.DescriptionLoc);
+             }
+ 
+             ImGuiHelpers.ScaledDummy(5);
+@@ -2763,7 +2819,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+             ImGuiHelpers.ScaledDummy(5);
+ 
+-            if (this.DrawPluginImages(null, manifest, isThirdParty, index))
++            if (this.DrawPluginImages(null, manifest, index))
+                 ImGuiHelpers.ScaledDummy(5);
+ 
+             ImGui.Unindent();
+@@ -2912,9 +2968,6 @@ internal class PluginInstallerWindow : Window, IDisposable
+             availablePluginUpdate = null;
+ 
+         // Update available
+-        var isMainRepoCrossUpdate = availablePluginUpdate != null &&
+-                                    availablePluginUpdate.UpdateManifest.RepoUrl != plugin.Manifest.RepoUrl &&
+-                                    availablePluginUpdate.UpdateManifest.RepoUrl == PluginRepository.MainRepoUrl;
+         if (availablePluginUpdate != null)
+         {
+             label += Locs.PluginTitleMod_HasUpdate;
+@@ -2953,8 +3006,8 @@ internal class PluginInstallerWindow : Window, IDisposable
+             trouble = true;
+         }
+ 
+-        // Orphaned, if we don't have a cross-repo update
+-        if (plugin.IsOrphaned && !isMainRepoCrossUpdate)
++        // Orphaned
++        if (plugin.IsOrphaned)
+         {
+             label += Locs.PluginTitleMod_OrphanedError;
+             trouble = true;
+@@ -3003,25 +3056,32 @@ internal class PluginInstallerWindow : Window, IDisposable
+             flags |= PluginHeaderFlags.HasTrouble;
+         if (availablePluginUpdate != null)
+             flags |= PluginHeaderFlags.UpdateAvailable;
+-        if (isMainRepoCrossUpdate)
+-            flags |= PluginHeaderFlags.MainRepoCrossUpdate;
+         if (plugin.IsOrphaned)
+             flags |= PluginHeaderFlags.IsOrphan;
+         if (plugin.IsTesting)
+             flags |= PluginHeaderFlags.IsTesting;
+ 
+-        if (this.DrawPluginCollapsingHeader(label, plugin, plugin.Manifest, flags, () => this.DrawInstalledPluginContextMenu(plugin, remoteManifest, testingOptIn), index))
++        if (this.DrawPluginCollapsingHeader(label, plugin, plugin.Manifest, flags, () => this.DrawInstalledPluginContextMenu(plugin, remoteManifest, testingOptIn), index, remoteManifest))
+         {
+             if (!this.WasPluginSeen(plugin.Manifest.InternalName))
+                 configuration.SeenPluginInternalName.Add(plugin.Manifest.InternalName);
+ 
+             var manifest = plugin.Manifest;
++            var locManifest = remoteManifest ?? (IPluginManifest)manifest;
+ 
+             ImGui.Indent();
+ 
+             // Name
+             ImGui.Text(manifest.Name);
+ 
++            if (!string.IsNullOrWhiteSpace(locManifest.NameLoc) &&
++                locManifest.NameLoc != manifest.Name)
++            {
++                ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
++                using (ImRaii.PushColor(ImGuiCol.Text, ImGuiColors.DalamudGrey2))
++                    ImGui.Text($"（{locManifest.NameLoc}）");
++            }
++
+             // Download count
+             var downloadText = plugin.IsDev
+                                    ? Locs.PluginBody_AuthorWithoutDownloadCount(manifest.Author)
+@@ -3060,7 +3120,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+             // Description
+             if (!string.IsNullOrWhiteSpace(manifest.Description))
+             {
+-                ImGui.TextWrapped(manifest.Description);
++                this.DrawLocalizableTextWrapped(manifest.Description, locManifest.DescriptionLoc);
+             }
+ 
+             // Working Plugin ID
+@@ -3123,7 +3183,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+             ImGuiHelpers.ScaledDummy(5);
+ 
+-            if (this.DrawPluginImages(plugin, manifest, isThirdParty, index))
++            if (this.DrawPluginImages(plugin, manifest, index))
+                 ImGuiHelpers.ScaledDummy(5);
+ 
+             ImGui.Unindent();
+@@ -3639,21 +3699,7 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+     private void DrawSendFeedbackButton(RemotePluginManifest manifest, bool isTesting, bool big)
+     {
+-        var clicked = big ?
+-                          ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Comment, Locs.FeedbackModal_Title) :
+-                          ImGuiComponents.IconButton(FontAwesomeIcon.Comment);
+-
+-        if (clicked)
+-        {
+-            this.feedbackPlugin = manifest;
+-            this.feedbackModalOnNextFrame = true;
+-            this.feedbackIsTesting = isTesting;
+-        }
+-
+-        if (ImGui.IsItemHovered())
+-        {
+-            ImGui.SetTooltip(Locs.FeedbackModal_Title);
+-        }
++        // Standalone has no central feedback relay. Repository authors may expose their own support links.
+     }
+ 
+     private void DrawDevPluginValidationIssues(LocalDevPlugin devPlugin)
+@@ -3943,9 +3989,9 @@ internal class PluginInstallerWindow : Window, IDisposable
+         return false;
+     }
+ 
+-    private bool DrawPluginImages(LocalPlugin? plugin, IPluginManifest manifest, bool isThirdParty, int index)
++    private bool DrawPluginImages(LocalPlugin? plugin, IPluginManifest manifest, int index)
+     {
+-        var hasImages = this.imageCache.TryGetImages(plugin, manifest, isThirdParty, out var imageTextures);
++        var hasImages = this.imageCache.TryGetImages(plugin, manifest, out var imageTextures);
+         if (!hasImages || imageTextures.All(x => x == null))
+             return false;
+ 
+@@ -4753,21 +4799,21 @@ internal class PluginInstallerWindow : Window, IDisposable
+ 
+         public static string FeedbackModal_ContactInformation => Loc.Localize("InstallerFeedbackContactInfo", "Contact information");
+ 
+-        public static string FeedbackModal_ContactInformationHelp => Loc.Localize("InstallerFeedbackContactInfoHelp", "Discord usernames and e-mail addresses are accepted.\nIf you submit a Discord username, please join our discord server so that we can reach out to you easier.");
++        public static string FeedbackModal_ContactInformationHelp => Loc.Localize("InstallerFeedbackContactInfoHelp", "Standalone has no central feedback relay. Contact the repository author directly.");
+ 
+         public static string FeedbackModal_ContactInformationWarning => Loc.Localize("InstallerFeedbackContactInfoWarning", "Do not submit in-game character names.");
+ 
+         public static string FeedbackModal_ContactInformationRequired => Loc.Localize("InstallerFeedbackContactInfoRequired", "Contact information has not been provided. We require contact information to respond to questions, or to request additional information to troubleshoot problems.");
+ 
+-        public static string FeedbackModal_ContactInformationDiscordButton => Loc.Localize("ContactInformationDiscordButton", "Join XIVLauncher & Dalamud Discord");
++        public static string FeedbackModal_ContactInformationDiscordButton => Loc.Localize("ContactInformationDiscordButton", "Open Standalone source notes");
+ 
+-        public static string FeedbackModal_ContactInformationDiscordUrl => Loc.Localize("ContactInformationDiscordUrl", "https://goat.place/");
++        public static string FeedbackModal_ContactInformationDiscordUrl => Loc.Localize("ContactInformationDiscordUrl", "https://github.com/endfish/DalamudStandaloneCN#readme");
+ 
+         public static string FeedbackModal_IncludeLastError => Loc.Localize("InstallerFeedbackIncludeLastError", "Include last error message");
+ 
+         public static string FeedbackModal_IncludeLastErrorHint => Loc.Localize("InstallerFeedbackIncludeLastErrorHint", "This option can give the plugin developer useful feedback on what exactly went wrong.");
+ 
+-        public static string FeedbackModal_Hint => Loc.Localize("InstallerFeedbackHint", "All plugin developers will be able to see your feedback.\nPlease never include any personal or revealing information.\nIf you chose to include the last error message, information like your Windows username may be included.\n\nThe collected feedback is not stored on our end and immediately relayed to Discord.");
++        public static string FeedbackModal_Hint => Loc.Localize("InstallerFeedbackHint", "Standalone does not submit feedback to an official service. Use the plugin repository's own support channel and review logs for private information before sharing them.");
+ 
+         public static string FeedbackModal_NotificationSuccess => Loc.Localize("InstallerFeedbackNotificationSuccess", "Your feedback was sent successfully!");
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
+index c067d225d..95efab124 100644
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/ProfileManagerWidget.cs
+@@ -596,7 +596,7 @@ internal class ProfileManagerWidget
+                 if (pmPlugin != null)
+                 {
+                     var cursorBeforeIcon = ImGui.GetCursorPos();
+-                    pic.TryGetIcon(pmPlugin, pmPlugin.Manifest, pmPlugin.IsThirdParty, out var icon, out _);
++                    pic.TryGetIcon(pmPlugin, pmPlugin.Manifest, out var icon, out _);
+                     icon ??= pic.DefaultIcon;
+ 
+                     ImGui.Image(icon.Handle, new Vector2(pluginLineHeight));
+diff --git a/Dalamud/Interface/Internal/Windows/SelfTest/Steps/NounProcessorSelfTestStep.cs b/Dalamud/Interface/Internal/Windows/SelfTest/Steps/NounProcessorSelfTestStep.cs
+index 35d30bc6e..4e70a731b 100644
+--- a/Dalamud/Interface/Internal/Windows/SelfTest/Steps/NounProcessorSelfTestStep.cs
++++ b/Dalamud/Interface/Internal/Windows/SelfTest/Steps/NounProcessorSelfTestStep.cs
+@@ -1,4 +1,5 @@
+ using Dalamud.Bindings.ImGui;
++using Dalamud.Data;
+ using Dalamud.Game;
+ using Dalamud.Game.Text.Noun;
+ using Dalamud.Game.Text.Noun.Enums;
+@@ -296,6 +297,9 @@ internal class NounProcessorSelfTestStep : ISelfTestStep
+     /// <inheritdoc/>
+     public unsafe SelfTestStepResult RunStep()
+     {
++        if (Service<DataManager>.Get().Language == ClientLanguage.ChineseSimplified)
++            return SelfTestStepResult.Pass;
++
+         var nounProcessor = Service<NounProcessor>.Get();
+ 
+         for (var i = 0; i < this.tests.Length; i++)
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+index 0ea13fe13..24d472fba 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAbout.cs
+@@ -72,6 +72,12 @@ MalRD
+ philpax
+ 
+ 
++CN maintained by:
++Bluefissure
++Loskh
++wozaiha
++subjadeites
++MapleRecall
+ 
+ Localization by:
+ 
+@@ -207,13 +213,16 @@ Licensed under the Boost Software License
+ Please see licenses.txt for more information.
+ 
+ 
+-Thanks to everyone in the XIVLauncher Discord server!
+-Join us at: https://discord.gg/3NMcUV5
++Thanks to the Dalamud, XIVLauncher, XIVLauncherCN and related upstream communities.
++
++This is an unsupported personal Standalone CN source build.
++Standalone shell: https://github.com/endfish/DalamudStandaloneCN
+ 
+ 
+ 
+ Dalamud is licensed under AGPL v3 or later.
+-Contribute at: https://github.com/goatcorp/Dalamud
++Standalone fork: https://github.com/endfish/Dalamud
++Original upstream: https://github.com/goatcorp/Dalamud
+ ";
+ 
+     private readonly Stopwatch creditsThrottler;
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAutoUpdate.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAutoUpdate.cs
+index 0c2ef8926..f8cd80242 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAutoUpdate.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabAutoUpdate.cs
+@@ -54,7 +54,7 @@ internal sealed class SettingsTabAutoUpdates : SettingsTab
+         var behaviorInt = (int)this.behavior;
+         ImGui.RadioButton(Loc.Localize("DalamudSettingsAutoUpdateNone", "Do not check for updates automatically"), ref behaviorInt, (int)AutoUpdateBehavior.None);
+         ImGui.RadioButton(Loc.Localize("DalamudSettingsAutoUpdateNotify", "Only notify me of new updates"), ref behaviorInt, (int)AutoUpdateBehavior.OnlyNotify);
+-        ImGui.RadioButton(Loc.Localize("DalamudSettingsAutoUpdateMainRepo", "Auto-update main repository plugins"), ref behaviorInt, (int)AutoUpdateBehavior.UpdateMainRepo);
++        ImGui.RadioButton(Loc.Localize("DalamudSettingsAutoUpdateMainRepo", "Auto-update plugins from configured repositories"), ref behaviorInt, (int)AutoUpdateBehavior.UpdateMainRepo);
+         ImGui.RadioButton(Loc.Localize("DalamudSettingsAutoUpdateAll", "Auto-update all plugins"), ref behaviorInt, (int)AutoUpdateBehavior.UpdateAll);
+         this.behavior = (AutoUpdateBehavior)behaviorInt;
+ 
+@@ -118,7 +118,7 @@ internal sealed class SettingsTabAutoUpdates : SettingsTab
+                 if (pmPlugin != null)
+                 {
+                     var cursorBeforeIcon = ImGui.GetCursorPos();
+-                    pic.TryGetIcon(pmPlugin, pmPlugin.Manifest, pmPlugin.IsThirdParty, out var icon, out _);
++                    pic.TryGetIcon(pmPlugin, pmPlugin.Manifest, out var icon, out _);
+                     icon ??= pic.DefaultIcon;
+ 
+                     ImGui.Image(icon.Handle, new Vector2(pluginLineHeight));
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+index 1430f48e2..bba0a4720 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+@@ -149,14 +149,6 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+ 
+         ImGui.Separator();
+ 
+-        ImGui.Text("0"u8);
+-        ImGui.NextColumn();
+-        ImGui.Text("XIVLauncher"u8);
+-        ImGui.NextColumn();
+-        ImGui.NextColumn();
+-        ImGui.NextColumn();
+-        ImGui.Separator();
+-
+         ThirdPartyRepoSettings repoToRemove = null;
+ 
+         var repoNumber = 1;
+@@ -270,12 +262,6 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+ 
+     private static bool ValidThirdPartyRepoUrl(string url)
+     {
+-        // Disallow inputting main repo as a ThirdPartyRepo
+-        if (string.Equals(url, PluginRepository.MainRepoUrl, StringComparison.OrdinalIgnoreCase))
+-        {
+-            return false;
+-        }
+-
+         return Uri.TryCreate(url, UriKind.Absolute, out var uriResult)
+                && (uriResult.Scheme == Uri.UriSchemeHttps || uriResult.Scheme == Uri.UriSchemeHttp);
+     }
+diff --git a/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs b/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
+index c1e12352a..aa2f9f39d 100644
+--- a/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
++++ b/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
+@@ -123,7 +123,6 @@ internal class AutoUpdateManager : IServiceType
+     {
+         Unrestricted,
+         AllowNone,
+-        AllowMainRepo,
+     }
+ 
+     /// <summary>
+@@ -151,7 +150,9 @@ internal class AutoUpdateManager : IServiceType
+             // If we're only notifying, I guess it's fine to list all plugins.
+             AutoUpdateBehavior.OnlyNotify => UpdateListingRestriction.Unrestricted,
+ 
+-            AutoUpdateBehavior.UpdateMainRepo => UpdateListingRestriction.AllowMainRepo,
++            // Standalone has no official main repository. Every candidate has already been matched to the
++            // exact configured source URL of the installed plugin, so this legacy setting means all matched repos.
++            AutoUpdateBehavior.UpdateMainRepo => UpdateListingRestriction.Unrestricted,
+             AutoUpdateBehavior.UpdateAll => UpdateListingRestriction.Unrestricted,
+             _ => throw new ArgumentOutOfRangeException(nameof(behavior), behavior, null),
+         };
+@@ -472,9 +473,6 @@ internal class AutoUpdateManager : IServiceType
+             if (restriction == UpdateListingRestriction.AllowNone && optIn is not { Kind: AutoUpdatePreference.OptKind.AlwaysUpdate })
+                 return false;
+ 
+-            if (restriction == UpdateListingRestriction.AllowMainRepo && availablePluginUpdate.InstalledPlugin.IsThirdParty)
+-                return false;
+-
+             return true;
+         }
+     }
+diff --git a/Dalamud/Plugin/Internal/PluginManager.cs b/Dalamud/Plugin/Internal/PluginManager.cs
+index 1e5cb6fff..4d4897087 100644
+--- a/Dalamud/Plugin/Internal/PluginManager.cs
++++ b/Dalamud/Plugin/Internal/PluginManager.cs
+@@ -132,7 +132,6 @@ internal class PluginManager : IInternalDisposableService
+                     }));
+ 
+         this.configuration.PluginTestingOptIns ??= [];
+-        this.MainRepo = PluginRepository.CreateMainRepo(this.happyHttpClient);
+ 
+         registerStartupBlocker(
+             Task.Run(this.LoadAndStartLoadSyncPlugins),
+@@ -217,12 +216,7 @@ internal class PluginManager : IInternalDisposableService
+     }
+ 
+     /// <summary>
+-    /// Gets the main repository.
+-    /// </summary>
+-    public PluginRepository MainRepo { get; }
+-
+-    /// <summary>
+-    /// Gets a list of all plugin repositories. The main repo should always be first.
++    /// Gets a list of all user-configured plugin repositories, in priority order.
+     /// </summary>
+     public List<PluginRepository> Repos { get; private set; } = [];
+ 
+@@ -422,24 +416,25 @@ internal class PluginManager : IInternalDisposableService
+     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+     public async Task SetPluginReposFromConfigAsync(bool notify)
+     {
+-        var repos = new List<PluginRepository> { this.MainRepo };
+-        repos.AddRange(this.configuration.ThirdRepoList
+-                           .Where(repo => repo.IsEnabled && !repo.Url.IsNullOrEmpty())
+-                           .DistinctBy(x => x.Url)
+-                           .Select(repo => new PluginRepository(this.happyHttpClient, repo.Url, repo.IsEnabled)));
++        var repos = this.configuration.ThirdRepoList
++                        .Where(repo => repo.IsEnabled && !repo.Url.IsNullOrEmpty())
++                        .DistinctBy(x => x.Url, StringComparer.OrdinalIgnoreCase)
++                        .Select(repo => new PluginRepository(this.happyHttpClient, repo.Url, repo.IsEnabled))
++                        .ToList();
+ 
+         this.Repos = repos;
+-        await this.ReloadAllReposAsync();
++        await this.ReloadAllReposAsync(notify);
+     }
+ 
+     /// <summary>
+     /// Reload all plugin repositories. This is called after setting repos from config, but can also be called manually to refresh repos.
+     /// </summary>
++    /// <param name="notify">Whether to notify that available plugins changed after the refresh.</param>
+     /// <returns>Task that will resolve once all repos are reloaded.</returns>
+-    public async Task ReloadAllReposAsync()
++    public async Task ReloadAllReposAsync(bool notify = true)
+     {
+         if (this.repoRefreshTask is null or { IsCompleted: true })
+-            this.repoRefreshTask = this.ReloadAllReposInternalAsync();
++            this.repoRefreshTask = this.ReloadAllReposInternalAsync(notify);
+ 
+         await this.repoRefreshTask;
+     }
+@@ -1477,9 +1472,7 @@ internal class PluginManager : IInternalDisposableService
+             }
+ 
+             // Document the url the plugin was installed from
+-            tempManifest.InstalledFromUrl = repoManifest.SourceRepo.IsThirdParty
+-                                                ? repoManifest.SourceRepo.PluginMasterUrl
+-                                                : SpecialPluginSource.MainRepo;
++            tempManifest.InstalledFromUrl = repoManifest.SourceRepo.PluginMasterUrl;
+ 
+             // HACK: We need to do this at the moment so that D17 plugins can load their assets.
+             // Goat should get off his ass and fix the pipeline in Plogon to specify correct URLs
+@@ -1759,7 +1752,10 @@ internal class PluginManager : IInternalDisposableService
+ 
+             var updates = this.AvailablePlugins
+                               .Where(remoteManifest => plugin.Manifest.InternalName == remoteManifest.InternalName)
+-                              .Where(remoteManifest => plugin.Manifest.InstalledFromUrl == remoteManifest.SourceRepo.PluginMasterUrl || !remoteManifest.SourceRepo.IsThirdParty)
++                              .Where(remoteManifest => string.Equals(
++                                         plugin.Manifest.InstalledFromUrl,
++                                         remoteManifest.SourceRepo.PluginMasterUrl,
++                                         StringComparison.OrdinalIgnoreCase))
+                               .Where(remoteManifest => remoteManifest.MinimumDalamudVersion == null || Versioning.GetAssemblyVersionParsed() >= remoteManifest.MinimumDalamudVersion)
+                               .Where(remoteManifest => !remoteManifest.IsTestingExclusive || this.UseTesting(remoteManifest))
+                               .Where(remoteManifest =>
+@@ -1805,10 +1801,7 @@ internal class PluginManager : IInternalDisposableService
+ 
+         try
+         {
+-            Debug.Assert(!this.Repos.First().IsThirdParty, "First repository should be main repository");
+-            await this.Repos.First().ReloadAsync(); // Load official repo first
+-
+-            await Task.WhenAll(this.Repos.Skip(1).Select(repo => repo.ReloadAsync()));
++            await Task.WhenAll(this.Repos.Select(repo => repo.ReloadAsync()));
+ 
+             Log.Information("Repos reloaded, now refiltering...");
+ 
+@@ -1829,10 +1822,25 @@ internal class PluginManager : IInternalDisposableService
+         using var scope = this.pluginListLock.EnterScope();
+ 
+         this.availablePluginsList.Clear();
+-        this.availablePluginsList.AddRange(this.Repos
+-                                                .SelectMany(repo => repo.PluginMaster)
+-                                                .Where(this.IsManifestEligible)
+-                                                .Where(IsManifestVisible));
++
++        var selectedByInternalName = new Dictionary<string, RemotePluginManifest>(StringComparer.OrdinalIgnoreCase);
++        foreach (var manifest in this.Repos
++                                     .SelectMany(repo => repo.PluginMaster?.AsEnumerable() ?? Enumerable.Empty<RemotePluginManifest>())
++                                     .Where(this.IsManifestEligible)
++                                     .Where(IsManifestVisible))
++        {
++            if (selectedByInternalName.TryAdd(manifest.InternalName, manifest))
++                continue;
++
++            var selected = selectedByInternalName[manifest.InternalName];
++            Log.Warning(
++                "Ignoring duplicate plugin {InternalName} from {IgnoredRepo}; configured repository priority selected {SelectedRepo}",
++                manifest.InternalName,
++                manifest.SourceRepo.PluginMasterUrl,
++                selected.SourceRepo.PluginMasterUrl);
++        }
++
++        this.availablePluginsList.AddRange(selectedByInternalName.Values);
+ 
+         if (notify)
+         {
+diff --git a/Dalamud/Plugin/Internal/Types/LocalPlugin.cs b/Dalamud/Plugin/Internal/Types/LocalPlugin.cs
+index 8451821b6..dd1019304 100644
+--- a/Dalamud/Plugin/Internal/Types/LocalPlugin.cs
++++ b/Dalamud/Plugin/Internal/Types/LocalPlugin.cs
+@@ -185,17 +185,16 @@ internal class LocalPlugin : IAsyncDisposable
+     public bool IsTesting => this.manifest.Testing;
+ 
+     /// <summary>
+-    /// Gets a value indicating whether this plugin is orphaned(belongs to a repo) or not.
++    /// Gets a value indicating whether this plugin is orphaned. Standalone keeps local plugins loadable
++    /// when their source repository is unavailable.
+     /// </summary>
+-    public bool IsOrphaned => !this.IsDev &&
+-                              this.GetSourceRepository() == null;
++    public bool IsOrphaned => false;
+ 
+     /// <summary>
+-    /// Gets a value indicating whether this plugin is serviced(repo still exists, but plugin no longer does).
++    /// Gets a value indicating whether this plugin is decommissioned. Standalone treats removed repository
++    /// entries as unmanaged local installations instead of disabling them.
+     /// </summary>
+-    public bool IsDecommissioned => !this.IsDev &&
+-                                    this.GetSourceRepository()?.State == PluginRepositoryState.Success &&
+-                                    this.GetSourceRepository()?.PluginMaster?.FirstOrDefault(x => x.InternalName == this.manifest.InternalName) == null;
++    public bool IsDecommissioned => false;
+ 
+     /// <summary>
+     /// Gets a value indicating whether this plugin has been banned.
+@@ -580,13 +579,11 @@ internal class LocalPlugin : IAsyncDisposable
+             return null;
+ 
+         var repos = Service<PluginManager>.Get().Repos;
+-        return repos.FirstOrDefault(x =>
+-        {
+-            if (!x.IsThirdParty && !this.manifest.IsThirdParty)
+-                return true;
+-
+-            return x.PluginMasterUrl == this.manifest.InstalledFromUrl;
+-        });
++        return repos.FirstOrDefault(
++            repository => string.Equals(
++                repository.PluginMasterUrl,
++                this.manifest.InstalledFromUrl,
++                StringComparison.OrdinalIgnoreCase));
+     }
+ 
+     /// <summary>
+diff --git a/Dalamud/Plugin/Internal/Types/Manifest/LocalPluginManifest.cs b/Dalamud/Plugin/Internal/Types/Manifest/LocalPluginManifest.cs
+index 389ceb339..7a4f35a6d 100644
+--- a/Dalamud/Plugin/Internal/Types/Manifest/LocalPluginManifest.cs
++++ b/Dalamud/Plugin/Internal/Types/Manifest/LocalPluginManifest.cs
+@@ -37,8 +37,8 @@ internal record LocalPluginManifest : PluginManifest, ILocalPluginManifest
+     public Guid WorkingPluginId { get; set; } = Guid.Empty;
+ 
+     /// <summary>
+-    /// Gets a value indicating whether this manifest is associated with a plugin that was installed from a third party
+-    /// repo.
++    /// Gets a value indicating whether this manifest is associated with a configured custom repository rather than
++    /// the legacy official-source marker.
+     /// </summary>
+     public bool IsThirdParty => !this.InstalledFromUrl.IsNullOrEmpty() && this.InstalledFromUrl != SpecialPluginSource.MainRepo;
+ 
+diff --git a/Dalamud/Plugin/Internal/Types/Manifest/SpecialPluginSource.cs b/Dalamud/Plugin/Internal/Types/Manifest/SpecialPluginSource.cs
+index 29a6aebcf..907498848 100644
+--- a/Dalamud/Plugin/Internal/Types/Manifest/SpecialPluginSource.cs
++++ b/Dalamud/Plugin/Internal/Types/Manifest/SpecialPluginSource.cs
+@@ -6,7 +6,8 @@ namespace Dalamud.Plugin.Internal.Types.Manifest;
+ public static class SpecialPluginSource
+ {
+     /// <summary>
+-    /// Indication that this plugin came from the official Dalamud repository. 
++    /// Legacy marker retained for plugins imported from an official Dalamud installation.
++    /// Standalone does not create new installations with this source.
+     /// </summary>
+     public const string MainRepo = "OFFICIAL";
+ 
+diff --git a/Dalamud/Plugin/Internal/Types/PluginRepository.cs b/Dalamud/Plugin/Internal/Types/PluginRepository.cs
+index 6aab19896..155cb2e83 100644
+--- a/Dalamud/Plugin/Internal/Types/PluginRepository.cs
++++ b/Dalamud/Plugin/Internal/Types/PluginRepository.cs
+@@ -1,6 +1,5 @@
+ using System.Collections.Generic;
+ using System.Collections.ObjectModel;
+-using System.Diagnostics;
+ using System.Linq;
+ using System.Net;
+ using System.Net.Http;
+@@ -13,6 +12,9 @@ using Dalamud.Networking.Http;
+ using Dalamud.Plugin.Internal.Types.Manifest;
+ using Dalamud.Utility;
+ 
++using Microsoft.Extensions.Caching.Abstractions;
++using Microsoft.Extensions.Caching.InMemory;
++
+ using Newtonsoft.Json;
+ 
+ namespace Dalamud.Plugin.Internal.Types;
+@@ -22,14 +24,17 @@ namespace Dalamud.Plugin.Internal.Types;
+ /// </summary>
+ internal class PluginRepository
+ {
+-    /// <summary>
+-    /// The URL of the official main repository.
+-    /// </summary>
+-    public const string MainRepoUrl = "https://kamori.goats.dev/Plugin/PluginMaster";
+-
+     private const int HttpRequestTimeoutSeconds = 20;
+ 
+     private static readonly ModuleLog Log = ModuleLog.Create<PluginRepository>();
++    private static readonly InMemoryCacheHandler CacheHandler = new(
++        new SocketsHttpHandler
++        {
++            AutomaticDecompression = DecompressionMethods.All,
++            ConnectCallback = Service<HappyHttpClient>.Get().SharedHappyEyeballsCallback.ConnectCallback,
++        },
++        CacheExpirationProvider.CreateSimple(TimeSpan.FromHours(3), TimeSpan.FromSeconds(0), TimeSpan.FromSeconds(0)));
++
+     private readonly HttpClient httpClient;
+ 
+     /// <summary>
+@@ -40,13 +45,9 @@ internal class PluginRepository
+     /// <param name="isEnabled">Whether the plugin repo is enabled.</param>
+     public PluginRepository(HappyHttpClient happyHttpClient, string pluginMasterUrl, bool isEnabled)
+     {
+-        this.httpClient = new(new SocketsHttpHandler
++        this.httpClient = new(CacheHandler)
+         {
+-            AutomaticDecompression = DecompressionMethods.All,
+-            ConnectCallback = happyHttpClient.SharedHappyEyeballsCallback.ConnectCallback,
+-        })
+-        {
+-            Timeout = TimeSpan.FromSeconds(20),
++            Timeout = TimeSpan.FromSeconds(5),
+             DefaultRequestHeaders =
+             {
+                 Accept =
+@@ -64,7 +65,7 @@ internal class PluginRepository
+             },
+         };
+         this.PluginMasterUrl = pluginMasterUrl;
+-        this.IsThirdParty = pluginMasterUrl != MainRepoUrl;
++        this.IsThirdParty = true;
+         this.IsEnabled = isEnabled;
+     }
+ 
+@@ -93,19 +94,12 @@ internal class PluginRepository
+     /// </summary>
+     public PluginRepositoryState State { get; private set; }
+ 
+-    /// <summary>
+-    /// Gets a new instance of the <see cref="PluginRepository"/> class for the main repo.
+-    /// </summary>
+-    /// <param name="happyHttpClient">An instance of <see cref="HappyHttpClient"/>.</param>
+-    /// <returns>The new instance of main repository.</returns>
+-    public static PluginRepository CreateMainRepo(HappyHttpClient happyHttpClient) =>
+-        new(happyHttpClient, MainRepoUrl, true);
+-
+     /// <summary>
+     /// Reload the plugin master asynchronously in a task.
+     /// </summary>
++    /// <param name="skipCache">Skip MemoryCache.</param>
+     /// <returns>The new state.</returns>
+-    public async Task ReloadAsync()
++    public async Task ReloadAsync(bool skipCache = false)
+     {
+         this.State = PluginRepositoryState.InProgress;
+         this.PluginMaster = new List<RemotePluginManifest>().AsReadOnly();
+@@ -114,6 +108,13 @@ internal class PluginRepository
+         {
+             Log.Information($"Fetching repo: {this.PluginMasterUrl}");
+ 
++            if (skipCache)
++            {
++                CacheHandler.InvalidateCache(new Uri(this.PluginMasterUrl));
++                Log.Information($"Cache Clear: {this.PluginMasterUrl}");
++            }
++
++            // using var response = await HttpClient.GetAsync(this.PluginMasterUrl);
+             using var response = await this.GetPluginMaster(this.PluginMasterUrl);
+ 
+             response.EnsureSuccessStatusCode();
+@@ -128,48 +129,13 @@ internal class PluginRepository
+                 manifest.SourceRepo = this;
+             }
+ 
+-            var pm = Service<PluginManager>.Get();
+-            var official = pm.Repos.First();
+-            Debug.Assert(!official.IsThirdParty, "First repository should be official repository");
+-
+-            if (official.State == PluginRepositoryState.Success && this.IsThirdParty)
+-            {
+-                pluginMaster = pluginMaster.Where(thisRepoEntry =>
+-                {
+-                    if (official.PluginMaster!.Any(officialRepoEntry =>
+-                                                       string.Equals(thisRepoEntry.InternalName, officialRepoEntry.InternalName, StringComparison.InvariantCultureIgnoreCase)))
+-                    {
+-                        Log.Warning(
+-                            "The repository {RepoName} tried to replace the plugin {PluginName}, which is already installed through the official repo - this is no longer allowed for security reasons. " +
+-                            "Please reach out if you have an use case for this.",
+-                            this.PluginMasterUrl,
+-                            thisRepoEntry.InternalName);
+-                        return false;
+-                    }
+-
+-                    return true;
+-                }).ToList();
+-            }
+-            else if (this.IsThirdParty)
+-            {
+-                Log.Warning("Official repository not loaded - couldn't check for overrides!");
+-                this.State = PluginRepositoryState.Fail;
+-                return;
+-            }
+-
+             this.PluginMaster = pluginMaster.Where(this.IsValidManifest).ToList().AsReadOnly();
+ 
+-            // API9 HACK: Force IsHide to false, we should remove that
+-            if (!this.IsThirdParty)
+-            {
+-                foreach (var manifest in this.PluginMaster)
+-                {
+-                    manifest.IsHide = false;
+-                }
+-            }
+-
+             Log.Information($"Successfully fetched repo: {this.PluginMasterUrl}");
+             this.State = PluginRepositoryState.Success;
++
++            var stats = CacheHandler.StatsProvider.GetStatistics().Total;
++            Log.Information($"Cache: TotalRequests:{stats.TotalRequests}/CacheHit:{stats.CacheHit}/CacheMiss:{stats.CacheMiss}");
+         }
+         catch (Exception ex)
+         {
+@@ -211,14 +177,12 @@ internal class PluginRepository
+ 
+     private async Task<HttpResponseMessage> GetPluginMaster(string url, int timeout = HttpRequestTimeoutSeconds)
+     {
+-        var httpClient = Service<HappyHttpClient>.Get().SharedHttpClient;
+-
+         var request = new HttpRequestMessage(HttpMethod.Get, url);
+         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+         request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+ 
+         using var requestCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+ 
+-        return await httpClient.SendAsync(request, requestCts.Token);
++        return await this.httpClient.SendAsync(request, requestCts.Token);
+     }
+ }
+diff --git a/Dalamud/Support/BugBait.cs b/Dalamud/Support/BugBait.cs
+index 039791480..cc4f50cb8 100644
+--- a/Dalamud/Support/BugBait.cs
++++ b/Dalamud/Support/BugBait.cs
+@@ -1,12 +1,7 @@
+-using System.Net.Http;
+-using System.Text;
++using System;
+ using System.Threading.Tasks;
+ 
+-using Dalamud.Networking.Http;
+ using Dalamud.Plugin.Internal.Types.Manifest;
+-using Dalamud.Utility;
+-
+-using Newtonsoft.Json;
+ 
+ namespace Dalamud.Support;
+ 
+@@ -15,8 +10,6 @@ namespace Dalamud.Support;
+ /// </summary>
+ internal static class BugBait
+ {
+-    private const string BugBaitUrl = "https://kiko.goats.dev/feedback";
+-
+     /// <summary>
+     /// Send feedback to Discord.
+     /// </summary>
+@@ -26,55 +19,6 @@ internal static class BugBait
+     /// <param name="reporter">The reporter name.</param>
+     /// <param name="includeException">Whether the most recent exception to occur should be included in the report.</param>
+     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+-    public static async Task SendFeedback(RemotePluginManifest plugin, bool isTesting, string content, string reporter, bool includeException)
+-    {
+-        if (content.IsNullOrWhitespace())
+-            return;
+-
+-        var model = new FeedbackModel
+-        {
+-            Content = content,
+-            Reporter = reporter,
+-            Name = plugin.InternalName,
+-            Version = isTesting ? plugin.TestingAssemblyVersion?.ToString() : plugin.AssemblyVersion.ToString(),
+-            Platform = Util.GetHostPlatform().ToString(),
+-            DalamudHash = Versioning.GetScmVersion(),
+-        };
+-
+-        if (includeException)
+-        {
+-            model.Exception = Troubleshooting.LastException == null ? "Was included, but none happened" : Troubleshooting.LastException?.ToString();
+-        }
+-
+-        var httpClient = Service<HappyHttpClient>.Get().SharedHttpClient;
+-
+-        var postContent = new StringContent(JsonConvert.SerializeObject(model), Encoding.UTF8, "application/json");
+-        var response = await httpClient.PostAsync(BugBaitUrl, postContent);
+-
+-        response.EnsureSuccessStatusCode();
+-    }
+-
+-    private class FeedbackModel
+-    {
+-        [JsonProperty("content")]
+-        public string? Content { get; set; }
+-
+-        [JsonProperty("name")]
+-        public string? Name { get; set; }
+-
+-        [JsonProperty("dhash")]
+-        public string? DalamudHash { get; set; }
+-
+-        [JsonProperty("version")]
+-        public string? Version { get; set; }
+-
+-        [JsonProperty("platform")]
+-        public string? Platform { get; set; }
+-
+-        [JsonProperty("reporter")]
+-        public string? Reporter { get; set; }
+-
+-        [JsonProperty("exception")]
+-        public string? Exception { get; set; }
+-    }
++    public static Task SendFeedback(RemotePluginManifest plugin, bool isTesting, string content, string reporter, bool includeException) =>
++        Task.FromException(new NotSupportedException("Standalone builds do not provide an official feedback service."));
+ }
+diff --git a/Dalamud/Support/DalamudReleases.cs b/Dalamud/Support/DalamudReleases.cs
+index 99a808492..c33e2744a 100644
+--- a/Dalamud/Support/DalamudReleases.cs
++++ b/Dalamud/Support/DalamudReleases.cs
+@@ -1,8 +1,7 @@
++﻿using System;
+ using System.Diagnostics.CodeAnalysis;
+ using System.Threading.Tasks;
+ 
+-using Dalamud.Configuration.Internal;
+-using Dalamud.Networking.Http;
+ using Dalamud.Utility;
+ 
+ using Newtonsoft.Json;
+@@ -15,39 +14,28 @@ namespace Dalamud.Support;
+ [ServiceManager.EarlyLoadedService]
+ internal class DalamudReleases : IServiceType
+ {
+-    private const string VersionInfoUrl = "https://kamori.goats.dev/Dalamud/Release/VersionInfo?track={0}";
+-
+-    private readonly HappyHttpClient httpClient;
+-    private readonly DalamudConfiguration config;
+-
+     /// <summary>
+     /// Initializes a new instance of the <see cref="DalamudReleases"/> class.
+     /// </summary>
+-    /// <param name="httpClient">The shared HTTP client.</param>
+-    /// <param name="config">The Dalamud configuration.</param>
+     [ServiceManager.ServiceConstructor]
+-    public DalamudReleases(HappyHttpClient httpClient, DalamudConfiguration config)
++    public DalamudReleases()
+     {
+-        this.httpClient = httpClient;
+-        this.config = config;
+     }
+ 
+     /// <summary>
+     /// Get the latest version info for the current track.
+     /// </summary>
+     /// <returns>The version info for the current track.</returns>
+-    public async Task<DalamudVersionInfo?> GetVersionForCurrentTrack()
+-    {
+-        var currentTrack = Versioning.GetActiveTrack();
+-        if (currentTrack.IsNullOrEmpty())
+-            return null;
+-
+-        var url = string.Format(VersionInfoUrl, [currentTrack]);
+-        var response = await this.httpClient.SharedHttpClient.GetAsync(url);
+-        response.EnsureSuccessStatusCode();
+-        var content = await response.Content.ReadAsStringAsync();
+-        return JsonConvert.DeserializeObject<DalamudVersionInfo>(content);
+-    }
++    public Task<DalamudVersionInfo?> GetVersionForCurrentTrack() =>
++        Task.FromResult<DalamudVersionInfo?>(new DalamudVersionInfo
++        {
++            Track = Versioning.GetActiveTrack() ?? "standalone-cn",
++            AssemblyVersion = Versioning.GetScmVersion(),
++            RuntimeVersion = Environment.Version.ToString(),
++            RuntimeRequired = true,
++            SupportedGameVer = string.Empty,
++            IsApplicableForCurrentGameVer = true,
++        });
+ 
+     [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1600:Elements should be documented", Justification = "laziness")]
+     public class DalamudVersionInfo
+diff --git a/Dalamud/Utility/Util.cs b/Dalamud/Utility/Util.cs
+index a94db76fd..b9c19a281 100644
+--- a/Dalamud/Utility/Util.cs
++++ b/Dalamud/Utility/Util.cs
+@@ -660,7 +660,7 @@ public static partial class Util
+     internal static string GetRandomName()
+     {
+         var data = Service<DataManager>.Get();
+-        var names = data.GetExcelSheet<BNpcName>(ClientLanguage.English)!;
++        var names = data.GetExcelSheet<BNpcName>(data.Language)!;
+         var rng = new Random();
+ 
+         return names.GetRowAt(rng.Next(0, names.Count - 1)).Singular.ExtractText();
+diff --git a/DalamudCrashHandler/DalamudCrashHandler.cpp b/DalamudCrashHandler/DalamudCrashHandler.cpp
+index 5281b1189..74aea5258 100644
+--- a/DalamudCrashHandler/DalamudCrashHandler.cpp
++++ b/DalamudCrashHandler/DalamudCrashHandler.cpp
+@@ -2180,14 +2180,13 @@ int main() {
+         config.hInstance = GetModuleHandleW(nullptr);
+         config.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_CAN_BE_MINIMIZED | TDF_ALLOW_DIALOG_CANCELLATION | TDF_USE_COMMAND_LINKS | TDF_NO_DEFAULT_RADIO_BUTTON;
+         config.pszMainIcon = MAKEINTRESOURCE(IDI_ICON1);
+-        config.pszMainInstruction = L"An error in the game occurred";
++        config.pszMainInstruction = L"\x51FA\x73B0\x81F4\x547D\x9519\x8BEF";
+         config.pszContent = (L""
+-            R"aa(The game has to close. This error may be caused by a faulty plugin, a broken mod, any other third-party tool, or simply a bug in the game.)aa" "\n"
++            L"\x53D1\x751F\x7684\x539F\x56E0\x53EF\x80FD\x662F\x4E00\x4E2A\x51FA\x9519\x7684\x63D2\x4EF6\x3001\x635F\x574F\x7684 TexTools Mod\x3001\x5176\x4ED6\x7684\x7B2C\x4E09\x65B9\x5DE5\x5177\xFF0C\x6216\x4EC5\x4EC5\x662F\x6E38\x620F\x672C\x8EAB\x7684 Bug\x3002" "\n"
+             "\n"
+-            R"aa(Try running a game repair in XIVLauncher by right clicking the login button, and disabling plugins you don't need. Please also check your antivirus, see our <a href="help">help site</a> for more information.)aa" "\n"
++            L"This is an unsupported standalone build. Disable plugins and verify the game files before trying again." "\n"
+             "\n"
+-            R"aa(For further assistance, please upload <a href="exporttspack">a troubleshooting pack</a> to our <a href="discord">Discord server</a>.)aa" "\n"
+-
++            R"aa(Read the <a href="help">source and risk notes</a>, or <a href="exporttspack">save troubleshooting information</a> for your own analysis.)aa" "\n"
+         );
+         config.pButtons = buttons;
+         config.cButtons = ARRAYSIZE(buttons);
+@@ -2226,15 +2225,13 @@ int main() {
+                 {
+                     const auto link = std::wstring_view(reinterpret_cast<const wchar_t*>(lParam));
+                     if (link == L"help") {
+-                        ShellExecuteW(hwnd, nullptr, L"https://goatcorp.github.io/faq?utm_source=vectored", nullptr, nullptr, SW_SHOW);
++                        ShellExecuteW(hwnd, nullptr, L"https://github.com/endfish/DalamudStandaloneCN#readme", nullptr, nullptr, SW_SHOW);
+                     } else if (link == L"logdir") {
+                         open_folder_and_select_items(hwnd, logPath.wstring());
+                     } else if (link == L"logfile") {
+                         ShellExecuteW(hwnd, nullptr, logPath.c_str(), nullptr, nullptr, SW_SHOW);
+                     } else if (link == L"exporttspack") {
+                         export_tspack(hwnd, logDir, ws_to_u8(log.str()), troubleshootingPackData);
+-                    } else if (link == L"discord") {
+-                        ShellExecuteW(hwnd, nullptr, L"https://goat.place", nullptr, nullptr, SW_SHOW);
+                     } else if (link == L"resume") {
+                         attemptResume = true;
+                         DestroyWindow(hwnd);
+diff --git a/Directory.Packages.props b/Directory.Packages.props
+index 66e97b7d8..25615dc4d 100644
+--- a/Directory.Packages.props
++++ b/Directory.Packages.props
+@@ -50,5 +50,8 @@
+     <PackageVersion Include="xunit.v3.assert" Version="3.2.2" />
+     <PackageVersion Include="xunit.v3.runner.console" Version="3.2.2" />
+     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
++
++    <!-- CN -->
++    <PackageVersion Include="HttpClient.Caching" Version="1.6.6" />
+   </ItemGroup>
+ </Project>

@@ -1,0 +1,2327 @@
+diff --git a/Dalamud.Common/ClientLanguage.cs b/Dalamud.Common/ClientLanguage.cs
+index 1fd58dce1..1c3102a46 100644
+--- a/Dalamud.Common/ClientLanguage.cs
++++ b/Dalamud.Common/ClientLanguage.cs
+@@ -24,4 +24,9 @@ public enum ClientLanguage
+     /// Indicating a French game client.
+     /// </summary>
+     French,
++
++    /// <summary>
++    /// Indicating a Simplified Chinese game client.
++    /// </summary>
++    ChineseSimplified,
+ }
+diff --git a/Dalamud.Test/Data/Excel/CsvOverlayPackTests.cs b/Dalamud.Test/Data/Excel/CsvOverlayPackTests.cs
+new file mode 100644
+index 000000000..423b9f5a2
+--- /dev/null
++++ b/Dalamud.Test/Data/Excel/CsvOverlayPackTests.cs
+@@ -0,0 +1,366 @@
++using System;
++using System.Buffers.Binary;
++using System.Collections.Generic;
++using System.IO;
++using System.IO.Compression;
++using System.Linq;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Text;
++
++using Dalamud.Data.Excel;
++
++using Lumina.Data;
++using Lumina.Data.Files.Excel;
++using Lumina.Data.Structs.Excel;
++using Lumina.Excel;
++using Lumina.Text.ReadOnly;
++
++using Xunit;
++
++namespace Dalamud.Test.Data.Excel;
++
++public sealed class CsvOverlayPackTests
++{
++    private const string ValidPackJson = """
++        {
++          "formatVersion": 1,
++          "gameVersion": "2026.06.18.0000.0000",
++          "language": "English",
++          "profileVersion": 3,
++          "variant": "lite",
++          "sheets": [
++            {
++              "name": "TestSheet",
++              "entry": "sheets/TestSheet.json",
++              "columnTypes": [ "str", "uint32", "uint32", "bit&01" ],
++              "variant": "default"
++            }
++          ]
++        }
++        """;
++
++    private const string ValidSheetJson = """
++        {
++          "formatVersion": 1,
++          "rows": [
++            {
++              "rowId": 42,
++              "cells": [
++                { "column": 0, "value": "English" }
++              ]
++            }
++          ],
++          "macroRows": [
++            {
++              "rowId": 42,
++              "cells": [
++                { "column": 2, "value": "<icon(1)>" }
++              ]
++            }
++          ]
++        }
++        """;
++
++    [Fact]
++    public void Read_ValidPack_ReturnsPhysicalSchemaAndRows()
++    {
++        using var stream = CreatePack(ValidPackJson, ValidSheetJson);
++
++        var pack = CsvOverlayPack.Read(stream);
++        var sheet = Assert.Single(pack.Sheets).Value;
++
++        Assert.Equal("2026.06.18.0000.0000", pack.Manifest.GameVersion);
++        Assert.Equal(["str", "uint32", "uint32", "bit&01"], sheet.Definition.ColumnTypes);
++        var row = Assert.Single(sheet.Rows);
++        Assert.Collection(
++            row.Cells.OrderBy(cell => cell.Column),
++            cell =>
++            {
++                Assert.Equal("English", cell.Value);
++                Assert.False(cell.IsMacroString);
++            },
++            cell =>
++            {
++                Assert.Equal("<icon(1)>", cell.Value);
++                Assert.True(cell.IsMacroString);
++            });
++    }
++
++    [Fact]
++    public void Read_UnsupportedMetadata_Throws()
++    {
++        using var stream = CreatePack(
++            ValidPackJson.Replace("\"language\": \"English\"", "\"language\": \"Japanese\""),
++            ValidSheetJson);
++
++        Assert.Throws<InvalidDataException>(() => CsvOverlayPack.Read(stream));
++    }
++
++    [Fact]
++    public void Read_MissingSheet_Throws()
++    {
++        using var stream = CreatePack(ValidPackJson, ValidSheetJson, "sheets/OtherSheet.json");
++
++        Assert.Throws<InvalidDataException>(() => CsvOverlayPack.Read(stream));
++    }
++
++    [Fact]
++    public void Create_ReplacesOneStringAndPreservesOtherPayloadAndNumericBytes()
++    {
++        var header = CreateHeader(ExcelVariant.Default);
++        var sourcePage = CreatePage();
++        var module = (ExcelModule)RuntimeHelpers.GetUninitializedObject(typeof(ExcelModule));
++        var rawFactory = new LuminaRawSheetFactory();
++        var baseSheet = rawFactory.Create(
++            module,
++            header,
++            Language.ChineseSimplified,
++            0x12345678,
++            [sourcePage.ToArray()]);
++        var overlay = CreateOverlay(["str", "uint32", "str", "str"]);
++
++        var result = new CsvOverlayRawSheetFactory().Create(
++            module,
++            header,
++            Language.English,
++            baseSheet,
++            overlay);
++        var row = CreateRawRow(result);
++        var resultPage = Assert.Single(rawFactory.ClonePageData(result))!;
++        const int rowOffset = 40;
++        const int rowDataOffset = rowOffset + 6;
++        const int fixedDataSize = 16;
++        var sourceRowSize = BinaryPrimitives.ReadUInt32BigEndian(sourcePage.AsSpan(rowOffset, sizeof(uint)));
++        var resultRowSize = BinaryPrimitives.ReadUInt32BigEndian(resultPage.AsSpan(rowOffset, sizeof(uint)));
++        var originalStringBytes = sourcePage.AsSpan(
++            rowDataOffset + fixedDataSize,
++            checked((int)sourceRowSize - fixedDataSize));
++
++        Assert.Equal("English", row.ReadStringColumn(0).ExtractText());
++        Assert.Equal("保留中文", row.ReadStringColumn(2).ExtractText());
++        Assert.Equal(sourcePage.AsSpan(rowDataOffset + 4, sizeof(uint)), resultPage.AsSpan(rowDataOffset + 4, sizeof(uint)));
++        Assert.Equal(sourcePage.AsSpan(rowDataOffset + 8, sizeof(uint)), resultPage.AsSpan(rowDataOffset + 8, sizeof(uint)));
++        Assert.Equal(sourcePage.AsSpan(rowDataOffset + 12, sizeof(uint)), resultPage.AsSpan(rowDataOffset + 12, sizeof(uint)));
++        Assert.Equal(
++            originalStringBytes,
++            resultPage.AsSpan(rowDataOffset + fixedDataSize, originalStringBytes.Length));
++        Assert.Equal(sourceRowSize + (uint)Encoding.UTF8.GetByteCount("English") + 1, resultRowSize);
++        Assert.Equal(
++            sourceRowSize - fixedDataSize,
++            BinaryPrimitives.ReadUInt32BigEndian(resultPage.AsSpan(rowDataOffset, sizeof(uint))));
++        Assert.Equal(sourcePage, Assert.Single(rawFactory.ClonePageData(baseSheet)));
++        Assert.Equal(
++            (uint)(resultPage.Length - rowOffset),
++            BinaryPrimitives.ReadUInt32BigEndian(resultPage.AsSpan(12, sizeof(uint))));
++    }
++
++    [Fact]
++    public void Schema_MismatchOrSubrows_IsRejected()
++    {
++        var header = CreateHeader(ExcelVariant.Default);
++        var wrongType = CreateOverlay(["uint32", "uint32", "str", "str"]).Definition;
++
++        Assert.False(CsvOverlayRawSheetFactory.IsCompatible(header, wrongType));
++
++        var subrowHeader = CreateHeader(ExcelVariant.Subrows);
++        Assert.False(
++            CsvOverlayRawSheetFactory.IsCompatible(
++                subrowHeader,
++                CreateOverlay(["str", "uint32", "str", "str"]).Definition));
++    }
++
++    [Fact]
++    public void Create_GrowingFirstRowRewritesFollowingIndexOffset()
++    {
++        var header = CreateHeader(ExcelVariant.Default, rowCount: 2);
++        var sourcePage = CreateTwoRowPage();
++        var originalSecondOffset = BinaryPrimitives.ReadUInt32BigEndian(sourcePage.AsSpan(44, sizeof(uint)));
++        var originalSecondRow = sourcePage.AsSpan(
++            checked((int)originalSecondOffset),
++            sourcePage.Length - checked((int)originalSecondOffset)).ToArray();
++        var module = (ExcelModule)RuntimeHelpers.GetUninitializedObject(typeof(ExcelModule));
++        var rawFactory = new LuminaRawSheetFactory();
++        var baseSheet = rawFactory.Create(
++            module,
++            header,
++            Language.ChineseSimplified,
++            0x12345678,
++            [sourcePage]);
++
++        var result = new CsvOverlayRawSheetFactory().Create(
++            module,
++            header,
++            Language.English,
++            baseSheet,
++            CreateOverlay(["str", "uint32", "str", "str"]));
++        var resultPage = Assert.Single(rawFactory.ClonePageData(result))!;
++        var resultSecondOffset = BinaryPrimitives.ReadUInt32BigEndian(resultPage.AsSpan(44, sizeof(uint)));
++
++        Assert.Equal(
++            originalSecondOffset + (uint)Encoding.UTF8.GetByteCount("English") + 1,
++            resultSecondOffset);
++        Assert.Equal(originalSecondRow, resultPage.AsSpan(checked((int)resultSecondOffset)));
++    }
++
++    [Fact]
++    public void Create_EncodesMacroStringAsSeStringPayload()
++    {
++        var header = CreateHeader(ExcelVariant.Default);
++        var module = (ExcelModule)RuntimeHelpers.GetUninitializedObject(typeof(ExcelModule));
++        var rawFactory = new LuminaRawSheetFactory();
++        var baseSheet = rawFactory.Create(
++            module,
++            header,
++            Language.ChineseSimplified,
++            0x12345678,
++            [CreatePage()]);
++        var overlay = CreateOverlay(["str", "uint32", "str", "str"]);
++        overlay.Rows[0].Cells[0].Value = "<icon(1)>";
++        overlay.Rows[0].Cells[0].IsMacroString = true;
++
++        var result = new CsvOverlayRawSheetFactory().Create(
++            module,
++            header,
++            Language.English,
++            baseSheet,
++            overlay);
++        var value = CreateRawRow(result).ReadStringColumn(0);
++
++        Assert.Equal("<icon(1)>", value.ToMacroString());
++        Assert.NotEqual("<icon(1)>", value.ExtractText());
++    }
++
++    private static MemoryStream CreatePack(
++        string packJson,
++        string sheetJson,
++        string sheetEntry = "sheets/TestSheet.json")
++    {
++        var stream = new MemoryStream();
++        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
++        {
++            WriteEntry(archive, "pack.json", packJson);
++            WriteEntry(archive, sheetEntry, sheetJson);
++        }
++
++        stream.Position = 0;
++        return stream;
++    }
++
++    private static void WriteEntry(ZipArchive archive, string name, string value)
++    {
++        var entry = archive.CreateEntry(name, CompressionLevel.NoCompression);
++        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false), leaveOpen: false);
++        writer.Write(value);
++    }
++
++    private static ExcelHeaderFile CreateHeader(ExcelVariant variant, uint rowCount = 1)
++    {
++        var header = new ExcelHeaderFile();
++        SetProperty(
++            header,
++            nameof(ExcelHeaderFile.Header),
++            new ExcelHeaderHeader
++            {
++                DataOffset = 16,
++                Variant = variant,
++                RowCount = rowCount,
++            });
++        SetProperty(
++            header,
++            nameof(ExcelHeaderFile.ColumnDefinitions),
++            new[]
++            {
++                new ExcelColumnDefinition { Type = ExcelColumnDataType.String, Offset = 0 },
++                new ExcelColumnDefinition { Type = ExcelColumnDataType.UInt32, Offset = 4 },
++                new ExcelColumnDefinition { Type = ExcelColumnDataType.String, Offset = 8 },
++                new ExcelColumnDefinition { Type = ExcelColumnDataType.String, Offset = 12 },
++            });
++        return header;
++    }
++
++    private static byte[] CreatePage()
++    {
++        var first = Encoding.UTF8.GetBytes("待替换");
++        var second = Encoding.UTF8.GetBytes("保留中文");
++        byte[] macro = [0x02, 0x10, 0x01, 0x03];
++        var stringDataSize = first.Length + second.Length + macro.Length + 3;
++        const int rowOffset = 40;
++        const int fixedDataSize = 16;
++        var rowSize = fixedDataSize + stringDataSize;
++        var data = new byte[rowOffset + 6 + rowSize];
++        "EXDF"u8.CopyTo(data);
++        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(4), 2);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(8), 8);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(12), checked((uint)(6 + rowSize)));
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(32), 42);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(36), rowOffset);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(rowOffset), checked((uint)rowSize));
++        BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(rowOffset + 4), 1);
++
++        var row = data.AsSpan(rowOffset + 6);
++        BinaryPrimitives.WriteUInt32BigEndian(row, 0);
++        BinaryPrimitives.WriteUInt32BigEndian(row.Slice(4), 0x12345678);
++        BinaryPrimitives.WriteUInt32BigEndian(row.Slice(8), checked((uint)(first.Length + 1)));
++        BinaryPrimitives.WriteUInt32BigEndian(row.Slice(12), checked((uint)(first.Length + second.Length + 2)));
++        var strings = row[fixedDataSize..];
++        first.CopyTo(strings);
++        strings[first.Length] = 0;
++        second.CopyTo(strings[(first.Length + 1)..]);
++        strings[first.Length + second.Length + 1] = 0;
++        macro.CopyTo(strings[(first.Length + second.Length + 2)..]);
++        return data;
++    }
++
++    private static byte[] CreateTwoRowPage()
++    {
++        var singlePage = CreatePage();
++        var row = singlePage.AsSpan(40).ToArray();
++        const int firstRowOffset = 48;
++        var secondRowOffset = firstRowOffset + row.Length;
++        var data = new byte[secondRowOffset + row.Length];
++        singlePage.AsSpan(0, 32).CopyTo(data);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(8), 16);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(12), checked((uint)(row.Length * 2)));
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(32), 42);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(36), firstRowOffset);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(40), 43);
++        BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(44), checked((uint)secondRowOffset));
++        row.CopyTo(data.AsSpan(firstRowOffset));
++        row.CopyTo(data.AsSpan(secondRowOffset));
++        return data;
++    }
++
++    private static CsvOverlaySheet CreateOverlay(IReadOnlyList<string> columnTypes) =>
++        new(
++            new CsvOverlaySheetDefinition
++            {
++                Name = "TestSheet",
++                Entry = "sheets/TestSheet.json",
++                ColumnTypes = [.. columnTypes],
++                Variant = "default",
++            },
++            [
++                new CsvOverlayRow
++                {
++                    RowId = 42,
++                    Cells = [new CsvOverlayCell { Column = 0, Value = "English" }],
++                },
++            ]);
++
++    private static void SetProperty<T>(ExcelHeaderFile header, string propertyName, T value)
++    {
++        var property = typeof(ExcelHeaderFile).GetProperty(propertyName);
++        Assert.NotNull(property);
++        property.SetValue(header, value);
++    }
++
++    private static RawRow CreateRawRow(RawExcelSheet sheet)
++    {
++        var method = typeof(RawExcelSheet).GetMethod(
++            "UnsafeCreateRowAt",
++            BindingFlags.Instance | BindingFlags.NonPublic);
++        Assert.NotNull(method);
++        return Assert.IsType<RawRow>(method.MakeGenericMethod(typeof(RawRow)).Invoke(sheet, [0]));
++    }
++}
+diff --git a/Dalamud.Test/Data/Excel/ExcelLanguagePackIntegrationTests.cs b/Dalamud.Test/Data/Excel/ExcelLanguagePackIntegrationTests.cs
+new file mode 100644
+index 000000000..0d2e388eb
+--- /dev/null
++++ b/Dalamud.Test/Data/Excel/ExcelLanguagePackIntegrationTests.cs
+@@ -0,0 +1,150 @@
++using System;
++using System.IO;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++using Dalamud.Common.Game;
++using Dalamud.Data;
++using Dalamud.Data.Excel;
++using Dalamud.Game;
++using Dalamud.Plugin.Services;
++
++using Lumina;
++using Lumina.Data;
++using Lumina.Excel;
++using Lumina.Excel.Sheets;
++
++using Xunit;
++
++namespace Dalamud.Test.Data.Excel;
++
++public sealed class ExcelLanguagePackIntegrationTests
++{
++    [Fact]
++    public void EnglishPack_InjectsAllPluginAccessPaths_AndPreservesChineseFallback()
++    {
++        var cnGamePath = Environment.GetEnvironmentVariable("DALAMUD_TEST_CN_GAME_PATH");
++        var assetPath = Environment.GetEnvironmentVariable("DALAMUD_TEST_ASSET_PATH");
++        var gameVersion = Environment.GetEnvironmentVariable("DALAMUD_TEST_GAME_VERSION");
++        Assert.SkipWhen(
++            string.IsNullOrWhiteSpace(cnGamePath) ||
++            string.IsNullOrWhiteSpace(assetPath) ||
++            string.IsNullOrWhiteSpace(gameVersion),
++            "Local CN game and language pack paths were not provided.");
++
++        using var primaryGameData = new GameData(
++            Path.Combine(cnGamePath!, "sqpack"),
++            new LuminaOptions
++            {
++                LoadMultithreaded = true,
++                CacheFileResources = true,
++                PanicOnSheetChecksumMismatch = true,
++                DefaultExcelLanguage = Language.ChineseSimplified,
++            })
++        {
++            StreamPool = new(),
++        };
++        var loader = ExcelLanguagePackLoader.LoadFromAssetDirectory(
++            new DirectoryInfo(assetPath!),
++            primaryGameData,
++            new GameVersion(gameVersion!));
++        Assert.True(loader.HasLoadedPacks);
++        Assert.True(loader.IsLanguageLoaded(Language.English));
++        var packPath = Assert.Single(
++            Directory.GetFiles(assetPath!, "*.xlcsvpack", SearchOption.AllDirectories));
++        using (var stream = File.OpenRead(packPath))
++        {
++            foreach (var sheetName in CsvOverlayPack.Read(stream).Sheets.Keys)
++                _ = primaryGameData.Excel.GetSheet<RawRow>(Language.English, sheetName);
++        }
++
++        var dataManager = (DataManager)RuntimeHelpers.GetUninitializedObject(typeof(DataManager));
++        SetField(dataManager, "<GameData>k__BackingField", primaryGameData);
++        SetField(dataManager, "excelLanguagePackLoader", loader);
++        var pluginDataManager = (IDataManager)dataManager;
++
++        var englishItem = pluginDataManager
++                          .GetExcelSheet<Item>(ClientLanguage.English)
++                          .GetRow(1);
++        var viaWrapper = englishItem.Name.ToString();
++        var viaExcel = pluginDataManager.Excel
++                                        .GetSheet<Item>(Language.English)
++                                        .GetRow(1)
++                                        .Name
++                                        .ToString();
++        var viaGameData = pluginDataManager.GameData.Excel
++                                           .GetSheet<Item>(Language.English)
++                                           .GetRow(1)
++                                           .Name
++                                           .ToString();
++        var chinese = pluginDataManager
++                      .GetExcelSheet<Item>(ClientLanguage.ChineseSimplified)
++                      .GetRow(1)
++                      .Name
++                      .ToString();
++        var unavailableLanguageFallback = pluginDataManager
++                                          .GetExcelSheet<Item>(ClientLanguage.Japanese)
++                                          .GetRow(1)
++                                          .Name
++                                          .ToString();
++        var macroDescription = pluginDataManager.Excel
++                                               .GetSheet<ActionTransient>(Language.English)
++                                               .GetRow(3)
++                                               .Description
++                                               .ToMacroString();
++        var fallbackSubrow = default(AkatsukiNote);
++        var foundFallbackSubrow = false;
++        foreach (var row in pluginDataManager
++                            .GetSubrowExcelSheet<AkatsukiNote>(ClientLanguage.English)
++                            .Flatten())
++        {
++            if (!row.Title.IsValid || string.IsNullOrEmpty(row.Title.Value.Text.ToString()))
++                continue;
++
++            fallbackSubrow = row;
++            foundFallbackSubrow = true;
++            break;
++        }
++        var localizedCategory = default(RowRef<ItemUICategory>);
++        var foundLocalizedCategory = false;
++        foreach (var row in pluginDataManager.GetExcelSheet<Item>(ClientLanguage.English))
++        {
++            if (row.ItemUICategory.RowId == 0 ||
++                !row.ItemUICategory.IsValid ||
++                string.IsNullOrEmpty(row.ItemUICategory.Value.Name.ToString()))
++            {
++                continue;
++            }
++
++            localizedCategory = row.ItemUICategory;
++            foundLocalizedCategory = true;
++            break;
++        }
++
++        Assert.Equal("Gil", viaWrapper);
++        Assert.Equal(viaWrapper, viaExcel);
++        Assert.Equal(viaWrapper, viaGameData);
++        Assert.NotEqual(viaWrapper, chinese);
++        Assert.Equal(chinese, unavailableLanguageFallback);
++        Assert.Contains("<colortype(504)>", macroDescription);
++        Assert.DoesNotContain("<UIForeground>", macroDescription);
++        Assert.True(foundFallbackSubrow);
++        Assert.Equal(Language.None, fallbackSubrow.ExcelPage.Language);
++        Assert.Equal(Language.None, fallbackSubrow.Title.Language);
++        Assert.NotEmpty(fallbackSubrow.Title.Value.Text.ToString());
++        Assert.True(foundLocalizedCategory);
++        Assert.Equal(Language.English, localizedCategory.Language);
++        Assert.Equal(Language.English, localizedCategory.Value.ExcelPage.Language);
++        Assert.NotEmpty(localizedCategory.Value.Name.ToString());
++        Assert.Same(pluginDataManager.Excel, pluginDataManager.GameData.Excel);
++    }
++
++    private static void SetField(DataManager dataManager, string fieldName, object value)
++    {
++        var field = typeof(DataManager).GetField(
++            fieldName,
++            BindingFlags.Instance | BindingFlags.NonPublic);
++        Assert.NotNull(field);
++        field.SetValue(dataManager, value);
++    }
++}
+diff --git a/Dalamud.Test/Data/Excel/ExcelLanguagePackLoaderTests.cs b/Dalamud.Test/Data/Excel/ExcelLanguagePackLoaderTests.cs
+new file mode 100644
+index 000000000..88a2c2c68
+--- /dev/null
++++ b/Dalamud.Test/Data/Excel/ExcelLanguagePackLoaderTests.cs
+@@ -0,0 +1,146 @@
++using System;
++using System.IO;
++
++using Dalamud.Data;
++using Dalamud.Data.Excel;
++using Dalamud.Game;
++
++using Lumina.Data;
++
++using Xunit;
++
++namespace Dalamud.Test.Data.Excel;
++
++public sealed class ExcelLanguagePackLoaderTests
++{
++    private const string ValidManifest = """
++        {
++          "formatVersion": 2,
++          "id": "en-lite",
++          "gameVersion": "2026.08.05.0000.0000",
++          "source": "csv-overlay",
++          "path": "en-lite.xlcsvpack",
++          "languages": [ "English" ],
++          "variant": "lite",
++          "profileVersion": 2,
++          "files": [
++            {
++              "path": "en-lite.xlcsvpack",
++              "size": 123,
++              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
++            }
++          ]
++        }
++        """;
++
++    [Fact]
++    public void ResolveContainedPath_ChildPath_ReturnsFullPath()
++    {
++        var root = Path.Combine(Path.GetTempPath(), "language-pack");
++
++        var actual = ExcelLanguagePackLoader.ResolveContainedPath(root, "en-lite.xlcsvpack");
++
++        Assert.Equal(Path.GetFullPath(Path.Combine(root, "en-lite.xlcsvpack")), actual);
++    }
++
++    [Theory]
++    [InlineData("../en-lite.xlcsvpack")]
++    [InlineData("sub/../../en-lite.xlcsvpack")]
++    public void ResolveContainedPath_ParentTraversal_Throws(string relativePath)
++    {
++        var root = Path.Combine(Path.GetTempPath(), "language-pack");
++
++        Assert.Throws<InvalidDataException>(
++            () => ExcelLanguagePackLoader.ResolveContainedPath(root, relativePath));
++    }
++
++    [Fact]
++    public void ResolveContainedPath_RootedPath_Throws()
++    {
++        var root = Path.Combine(Path.GetTempPath(), "language-pack");
++
++        Assert.Throws<InvalidDataException>(
++            () => ExcelLanguagePackLoader.ResolveContainedPath(root, Path.GetPathRoot(root)!));
++    }
++
++    [Fact]
++    public void ValidateLuminaCacheContract_CurrentLuminaShape_IsSupported()
++    {
++        ExcelLanguagePackLoader.ValidateLuminaCacheContract();
++        _ = new LuminaRawSheetFactory();
++    }
++
++    [Fact]
++    public void ReadManifest_ValidGeneratedManifest_ReturnsCsvOverlay()
++    {
++        var path = this.WriteManifest(ValidManifest);
++        try
++        {
++            var manifest = ExcelLanguagePackLoader.ReadManifest(path);
++
++            Assert.Equal("en-lite", manifest.Id);
++            Assert.Equal("csv-overlay", manifest.Source);
++            Assert.Equal("en-lite.xlcsvpack", manifest.Path);
++        }
++        finally
++        {
++            File.Delete(path);
++        }
++    }
++
++    [Theory]
++    [InlineData("\"formatVersion\": 2", "\"formatVersion\": 3")]
++    [InlineData("\"source\": \"csv-overlay\"", "\"source\": \"xlpack\"")]
++    [InlineData("\"languages\": [ \"English\" ]", "\"languages\": [ \"Japanese\" ]")]
++    public void ReadManifest_UnsupportedContract_Throws(string oldValue, string newValue)
++    {
++        var path = this.WriteManifest(ValidManifest.Replace(oldValue, newValue));
++        try
++        {
++            Assert.Throws<InvalidDataException>(() => ExcelLanguagePackLoader.ReadManifest(path));
++        }
++        finally
++        {
++            File.Delete(path);
++        }
++    }
++
++    [Fact]
++    public void ReadManifest_SourceTraversal_Throws()
++    {
++        var path = this.WriteManifest(
++            ValidManifest.Replace(
++                "\"path\": \"en-lite.xlcsvpack\"",
++                "\"path\": \"../en-lite.xlcsvpack\""));
++        try
++        {
++            Assert.Throws<InvalidDataException>(() => ExcelLanguagePackLoader.ReadManifest(path));
++        }
++        finally
++        {
++            File.Delete(path);
++        }
++    }
++
++    [Theory]
++    [InlineData(null, false, Language.ChineseSimplified)]
++    [InlineData(ClientLanguage.ChineseSimplified, false, Language.ChineseSimplified)]
++    [InlineData(ClientLanguage.English, false, Language.ChineseSimplified)]
++    [InlineData(ClientLanguage.English, true, Language.English)]
++    public void SelectExcelLanguage_UsesInstalledLanguageOrChineseFallback(
++        ClientLanguage? requested,
++        bool isInstalled,
++        Language expected)
++    {
++        var actual = DataManager.SelectExcelLanguage(requested, _ => isInstalled);
++
++        Assert.Equal(expected, actual);
++    }
++
++    private string WriteManifest(string contents)
++    {
++        var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
++        File.WriteAllText(path, contents);
++        return path;
++    }
++}
+diff --git a/Dalamud.Test/Game/Gui/CnUiLayoutTests.cs b/Dalamud.Test/Game/Gui/CnUiLayoutTests.cs
+new file mode 100644
+index 000000000..fe355affa
+--- /dev/null
++++ b/Dalamud.Test/Game/Gui/CnUiLayoutTests.cs
+@@ -0,0 +1,45 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++
++using FFXIVClientStructs.FFXIV.Client.UI;
++
++using Xunit;
++
++namespace Dalamud.Test.Game.Gui;
++
++// CN 2026.09.01: verified against native module getters and constructor/destructor access.
++// Signature resolution alone cannot detect these embedded-structure offset regressions.
++public sealed class CnUiLayoutTests
++{
++    [Theory]
++    [InlineData("AddonNames", 0x12348)]
++    [InlineData("UIModulePtr", 0x12418)]
++    [InlineData("AgentModule", 0x12428)]
++    [InlineData("RaptureAtkUnitManager", 0x13450)]
++    [InlineData("RaptureAtkColorDataManager", 0x1D180)]
++    public void RaptureAtkModuleOffsets(string field, int expected)
++        => Assert.Equal(expected, OffsetOf<RaptureAtkModule>(field));
++
++    [Theory]
++    [InlineData("ConfigModule", 0xAAE40)]
++    [InlineData("UI3DModule", 0xBB150)]
++    [InlineData("RaptureAtkModule", 0xD2690)]
++    [InlineData("InfoModule", 0xFD000)]
++    [InlineData("UIModuleHelpers", 0xFEC78)]
++    [InlineData("UIInputData", 0xFF020)]
++    [InlineData("UIInputModule", 0xFFA50)]
++    public void UIModuleOffsets(string field, int expected)
++        => Assert.Equal(expected, OffsetOf<UIModule>(field));
++
++    [Fact]
++    public void EmbeddedAtkModuleEndsAtInfoModule()
++        => Assert.Equal(
++            OffsetOf<UIModule>("InfoModule"),
++            OffsetOf<UIModule>("RaptureAtkModule") + Unsafe.SizeOf<RaptureAtkModule>());
++
++    // These types contain unmanaged function pointers and do not support Marshal.OffsetOf.
++    private static int OffsetOf<T>(string field)
++        => typeof(T).GetField(field, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
++            .GetCustomAttribute<FieldOffsetAttribute>()!.Value;
++}
+diff --git a/Dalamud/DalamudAsset.cs b/Dalamud/DalamudAsset.cs
+index 75445478b..f0ef7a175 100644
+--- a/Dalamud/DalamudAsset.cs
++++ b/Dalamud/DalamudAsset.cs
+@@ -131,6 +131,21 @@ public enum DalamudAsset
+     [DalamudAssetPath("UIRes", "NotoSansCJK-Medium.ttc")]
+     NotoSansCjkMedium = 2000,
+ 
++    /// <summary>
++    /// <see cref="DalamudAssetPurpose.Font"/>: Noto Sans CJK Medium.
++    /// </summary>
++    [DalamudAsset(DalamudAssetPurpose.Font)]
++    [DalamudAssetPath("UIRes", "NotoSansCJK-Regular.ttc")]
++    NotoSansCjkRegular = 2001,
++
++    /// <summary>
++    /// <see cref="DalamudAssetPurpose.Font"/>: Legacy alias for the Noto Sans CJK regular font.
++    /// </summary>
++    [Obsolete("Use NotoSansCjkRegular instead.")]
++    [DalamudAsset(DalamudAssetPurpose.Font)]
++    [DalamudAssetPath("UIRes", "NotoSansCJK-Regular.ttc")]
++    NotoSansKrRegular = 2001,
++
+     /// <summary>
+     /// <see cref="DalamudAssetPurpose.TextureFromPng"/>: Atlas containing badges.
+     /// </summary>
+@@ -139,11 +154,19 @@ public enum DalamudAsset
+     BadgeAtlas = 1015,
+ 
+     /// <summary>
+-    /// <see cref="DalamudAssetPurpose.Font"/>: Noto Sans CJK Regular.
++    /// <see cref="DalamudAssetPurpose.TextureFromPng"/>: Missing-font help image.
++    /// </summary>
++    [DalamudAsset(DalamudAssetPurpose.TextureFromPng)]
++    [DalamudAssetPath("UIRes", "missingFont.png")]
++    MissingFontTips = 1014,
++
++    /// <summary>
++    /// <see cref="DalamudAssetPurpose.Font"/>: Noto Sans CJK SC Medium.
+     /// </summary>
+     [DalamudAsset(DalamudAssetPurpose.Font)]
+-    [DalamudAssetPath("UIRes", "NotoSansCJK-Regular.ttc")]
+-    NotoSansCjkRegular = 2001,
++    [DalamudAssetPath("UIRes", "NotoSansCJKsc-Medium.otf")]
++    [DalamudAssetPath("UIRes", "NotoSansCJKsc-Regular.otf")]
++    NotoSansScMedium = 2005,
+ 
+     /// <summary>
+     /// <see cref="DalamudAssetPurpose.Font"/>: Inconsolata Regular.
+@@ -163,6 +186,5 @@ public enum DalamudAsset
+     /// <see cref="DalamudAssetPurpose.Font"/>: Game symbol fonts being used as webfonts at Lodestone.
+     /// </summary>
+     [DalamudAsset(DalamudAssetPurpose.Font, required: false)]
+-    // [DalamudAssetOnlineSource("https://img.finalfantasyxiv.com/lds/pc/global/fonts/FFXIV_Lodestone_SSF.ttf")]
+     LodestoneGameSymbol = 2004,
+ }
+diff --git a/Dalamud/Data/DataManager.cs b/Dalamud/Data/DataManager.cs
+index 21c70d1f6..08250c4d5 100644
+--- a/Dalamud/Data/DataManager.cs
++++ b/Dalamud/Data/DataManager.cs
+@@ -2,6 +2,7 @@ using System.IO;
+ using System.Threading;
+ using System.Threading.Tasks;
+ 
++using Dalamud.Data.Excel;
+ using Dalamud.Game;
+ using Dalamud.IoC;
+ using Dalamud.IoC.Internal;
+@@ -28,16 +29,18 @@ namespace Dalamud.Data;
+ #pragma warning restore SA1015
+ internal sealed class DataManager : IInternalDisposableService, IDataManager
+ {
++    private static readonly Lumina.Data.Language SupportedExcelLanguage = ClientLanguage.ChineseSimplified.ToLumina();
+     private static readonly ModuleLog Log = ModuleLog.Create<DataManager>();
+ 
+     private readonly Thread luminaResourceThread;
+     private readonly CancellationTokenSource luminaCancellationTokenSource;
+     private readonly RsvResolver rsvResolver;
++    private readonly ExcelLanguagePackLoader excelLanguagePackLoader;
+ 
+     [ServiceManager.ServiceConstructor]
+     private DataManager(Dalamud dalamud)
+     {
+-        this.Language = (ClientLanguage)dalamud.StartInfo.Language;
++        this.Language = ClientLanguage.ChineseSimplified;
+ 
+         this.rsvResolver = new();
+ 
+@@ -53,7 +56,7 @@ internal sealed class DataManager : IInternalDisposableService, IDataManager
+                     CacheFileResources = true,
+                     PanicOnSheetChecksumMismatch = true,
+                     RsvResolver = this.rsvResolver.TryResolve,
+-                    DefaultExcelLanguage = this.Language.ToLumina(),
++                    DefaultExcelLanguage = SupportedExcelLanguage,
+                 };
+ 
+                 try
+@@ -78,6 +81,14 @@ internal sealed class DataManager : IInternalDisposableService, IDataManager
+ 
+                 Log.Information("Lumina is ready: {0}", this.GameData.DataPath);
+ 
++                using (Timings.Start("Excel Language Packs"))
++                {
++                    this.excelLanguagePackLoader = ExcelLanguagePackLoader.LoadFromAssetDirectory(
++                        dalamud.AssetDirectory,
++                        this.GameData,
++                        dalamud.StartInfo.GameVersion);
++                }
++
+                 if (!dalamud.StartInfo.TroubleshootingPackData.IsNullOrEmpty())
+                 {
+                     try
+@@ -145,11 +156,11 @@ internal sealed class DataManager : IInternalDisposableService, IDataManager
+ 
+     /// <inheritdoc/>
+     public ExcelSheet<T> GetExcelSheet<T>(ClientLanguage? language = null, string? name = null) where T : struct, IExcelRow<T>
+-        => this.Excel.GetSheet<T>(language?.ToLumina(), name);
++        => this.Excel.GetSheet<T>(SelectExcelLanguage(language, this.excelLanguagePackLoader.IsLanguageLoaded), name);
+ 
+     /// <inheritdoc/>
+     public SubrowExcelSheet<T> GetSubrowExcelSheet<T>(ClientLanguage? language = null, string? name = null) where T : struct, IExcelSubrow<T>
+-        => this.Excel.GetSubrowSheet<T>(language?.ToLumina(), name);
++        => this.Excel.GetSubrowSheet<T>(SelectExcelLanguage(language, this.excelLanguagePackLoader.IsLanguageLoaded), name);
+ 
+     /// <inheritdoc/>
+     public FileResource? GetFile(string path)
+@@ -188,6 +199,23 @@ internal sealed class DataManager : IInternalDisposableService, IDataManager
+         this.rsvResolver.Dispose();
+     }
+ 
++    /// <summary>
++    /// Selects the requested Excel language when it is available, or Simplified Chinese otherwise.
++    /// </summary>
++    /// <param name="language">The requested language.</param>
++    /// <param name="isLanguageLoaded">Determines whether a sidecar language has been loaded.</param>
++    /// <returns>The language to request from Lumina.</returns>
++    internal static Lumina.Data.Language SelectExcelLanguage(
++        ClientLanguage? language,
++        Func<Lumina.Data.Language, bool> isLanguageLoaded)
++    {
++        var requestedLanguage = language?.ToLumina() ?? SupportedExcelLanguage;
++        return requestedLanguage == SupportedExcelLanguage ||
++               isLanguageLoaded(requestedLanguage)
++                   ? requestedLanguage
++                   : SupportedExcelLanguage;
++    }
++
+     private class LauncherTroubleshootingInfo
+     {
+         public enum IndexIntegrityResult
+diff --git a/Dalamud/Data/Excel/CsvOverlayPack.cs b/Dalamud/Data/Excel/CsvOverlayPack.cs
+new file mode 100644
+index 000000000..c8fb214fe
+--- /dev/null
++++ b/Dalamud/Data/Excel/CsvOverlayPack.cs
+@@ -0,0 +1,145 @@
++using System.Collections.Generic;
++using System.IO;
++using System.IO.Compression;
++using System.Linq;
++
++using Newtonsoft.Json;
++
++#pragma warning disable SA1600 // Internal generated-pack model.
++
++namespace Dalamud.Data.Excel;
++
++internal sealed class CsvOverlayPack
++{
++    private const int CurrentFormatVersion = 1;
++
++    private CsvOverlayPack(
++        CsvOverlayPackManifest manifest,
++        IReadOnlyDictionary<string, CsvOverlaySheet> sheets)
++    {
++        this.Manifest = manifest;
++        this.Sheets = sheets;
++    }
++
++    public CsvOverlayPackManifest Manifest { get; }
++
++    public IReadOnlyDictionary<string, CsvOverlaySheet> Sheets { get; }
++
++    public static CsvOverlayPack Read(Stream stream)
++    {
++        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
++        var manifest = ReadJson<CsvOverlayPackManifest>(archive, "pack.json");
++        if (manifest.FormatVersion != CurrentFormatVersion ||
++            manifest.Language != "English" ||
++            manifest.Variant != "lite")
++        {
++            throw new InvalidDataException("The CSV overlay pack has unsupported metadata.");
++        }
++
++        var sheets = new Dictionary<string, CsvOverlaySheet>(StringComparer.Ordinal);
++        foreach (var definition in manifest.Sheets)
++        {
++            var content = ReadJson<CsvOverlaySheetContent>(archive, definition.Entry);
++            if (content.FormatVersion != CurrentFormatVersion)
++                throw new InvalidDataException($"CSV overlay sheet '{definition.Name}' has an unsupported format.");
++
++            foreach (var cell in content.MacroRows.SelectMany(row => row.Cells))
++                cell.IsMacroString = true;
++
++            var rows = content.Rows
++                              .Concat(content.MacroRows)
++                              .GroupBy(row => row.RowId)
++                              .Select(
++                                  group => new CsvOverlayRow
++                                  {
++                                      RowId = group.Key,
++                                      Cells = group.SelectMany(row => row.Cells).ToList(),
++                                  })
++                              .ToList();
++            sheets.Add(definition.Name, new CsvOverlaySheet(definition, rows));
++        }
++
++        return new CsvOverlayPack(manifest, sheets);
++    }
++
++    private static T ReadJson<T>(ZipArchive archive, string entryName)
++    {
++        var entry = archive.GetEntry(entryName)
++                    ?? throw new InvalidDataException($"CSV overlay entry '{entryName}' is missing.");
++        using var stream = entry.Open();
++        using var reader = new StreamReader(stream);
++        using var jsonReader = new JsonTextReader(reader);
++        return JsonSerializer.CreateDefault().Deserialize<T>(jsonReader)
++               ?? throw new InvalidDataException($"CSV overlay entry '{entryName}' is empty.");
++    }
++}
++
++internal sealed class CsvOverlayPackManifest
++{
++    [JsonProperty("formatVersion", Required = Required.Always)]
++    public int FormatVersion { get; set; }
++
++    [JsonProperty("gameVersion", Required = Required.Always)]
++    public string GameVersion { get; set; } = string.Empty;
++
++    [JsonProperty("language", Required = Required.Always)]
++    public string Language { get; set; } = string.Empty;
++
++    [JsonProperty("variant", Required = Required.Always)]
++    public string Variant { get; set; } = string.Empty;
++
++    [JsonProperty("sheets", Required = Required.Always)]
++    public List<CsvOverlaySheetDefinition> Sheets { get; set; } = [];
++}
++
++internal sealed class CsvOverlaySheetDefinition
++{
++    [JsonProperty("name", Required = Required.Always)]
++    public string Name { get; set; } = string.Empty;
++
++    [JsonProperty("entry", Required = Required.Always)]
++    public string Entry { get; set; } = string.Empty;
++
++    [JsonProperty("columnTypes", Required = Required.Always)]
++    public List<string> ColumnTypes { get; set; } = [];
++
++    [JsonProperty("variant", Required = Required.Always)]
++    public string Variant { get; set; } = string.Empty;
++}
++
++internal sealed class CsvOverlaySheetContent
++{
++    [JsonProperty("formatVersion", Required = Required.Always)]
++    public int FormatVersion { get; set; }
++
++    [JsonProperty("rows", Required = Required.Always)]
++    public List<CsvOverlayRow> Rows { get; set; } = [];
++
++    [JsonProperty("macroRows")]
++    public List<CsvOverlayRow> MacroRows { get; set; } = [];
++}
++
++internal sealed record CsvOverlaySheet(
++    CsvOverlaySheetDefinition Definition,
++    IReadOnlyList<CsvOverlayRow> Rows);
++
++internal sealed class CsvOverlayRow
++{
++    [JsonProperty("rowId", Required = Required.Always)]
++    public uint RowId { get; set; }
++
++    [JsonProperty("cells", Required = Required.Always)]
++    public List<CsvOverlayCell> Cells { get; set; } = [];
++}
++
++internal sealed class CsvOverlayCell
++{
++    [JsonProperty("column", Required = Required.Always)]
++    public int Column { get; set; }
++
++    [JsonProperty("value", Required = Required.Always)]
++    public string Value { get; set; } = string.Empty;
++
++    [JsonIgnore]
++    public bool IsMacroString { get; set; }
++}
+diff --git a/Dalamud/Data/Excel/CsvOverlayRawSheetFactory.cs b/Dalamud/Data/Excel/CsvOverlayRawSheetFactory.cs
+new file mode 100644
+index 000000000..95a162663
+--- /dev/null
++++ b/Dalamud/Data/Excel/CsvOverlayRawSheetFactory.cs
+@@ -0,0 +1,200 @@
++using System.Buffers.Binary;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Text;
++
++using Lumina.Data;
++using Lumina.Data.Files.Excel;
++using Lumina.Data.Structs.Excel;
++using Lumina.Excel;
++using Lumina.Text.Parse;
++using Lumina.Text.ReadOnly;
++
++#pragma warning disable SA1600 // Internal raw-sheet implementation.
++
++namespace Dalamud.Data.Excel;
++
++internal sealed class CsvOverlayRawSheetFactory
++{
++    private const int ExcelDataHeaderSize = 32;
++    private const int ExcelDataOffsetSize = 8;
++
++    private static readonly MacroStringParseOptions StrictMacroOptions = new()
++    {
++        ExceptionMode = MacroStringParseExceptionMode.Throw,
++    };
++
++    private readonly LuminaRawSheetFactory rawSheetFactory = new();
++
++    public static bool IsCompatible(ExcelHeaderFile header, CsvOverlaySheetDefinition definition) =>
++        header.Header.Variant == ExcelVariant.Default &&
++        definition.Variant == "default" &&
++        header.ColumnDefinitions.Length == definition.ColumnTypes.Count &&
++        header.ColumnDefinitions
++              .Select(column => column.Type == ExcelColumnDataType.String)
++              .SequenceEqual(definition.ColumnTypes.Select(type => type == "str"));
++
++    public RawExcelSheet Create(
++        ExcelModule module,
++        ExcelHeaderFile header,
++        Language language,
++        RawExcelSheet baseSheet,
++        CsvOverlaySheet overlay)
++    {
++        var physicalColumns = header.ColumnDefinitions;
++        var rows = overlay.Rows.ToDictionary(row => row.RowId);
++        var rewrittenRows = new HashSet<uint>();
++        var pages = this.rawSheetFactory.ClonePageData(baseSheet).ToArray();
++        for (var i = 0; i < pages.Length; i++)
++        {
++            if (pages[i] is { } page)
++            {
++                pages[i] = RewritePage(
++                    page,
++                    header.Header.DataOffset,
++                    physicalColumns,
++                    rows,
++                    rewrittenRows);
++            }
++        }
++
++        var missingRow = rows.Keys.Except(rewrittenRows).Order().FirstOrDefault();
++        if (rewrittenRows.Count != rows.Count)
++        {
++            throw new InvalidDataException(
++                $"CSV overlay sheet '{overlay.Definition.Name}' references missing row {missingRow}.");
++        }
++
++        return this.rawSheetFactory.Create(
++            module,
++            header,
++            language,
++            this.rawSheetFactory.GetColumnHash(baseSheet),
++            pages);
++    }
++
++    private static byte[] RewritePage(
++        byte[] source,
++        ushort fixedDataSize,
++        IReadOnlyList<ExcelColumnDefinition> physicalColumns,
++        IReadOnlyDictionary<uint, CsvOverlayRow> overlays,
++        ISet<uint> rewrittenRows)
++    {
++        var data = source.AsSpan();
++        var indexSize = checked((int)BinaryPrimitives.ReadUInt32BigEndian(data.Slice(8, sizeof(uint))));
++        var rowCount = indexSize / ExcelDataOffsetSize;
++        if (rowCount == 0)
++            return source.ToArray();
++
++        var rows = new PageRow[rowCount];
++        for (var i = 0; i < rowCount; i++)
++        {
++            var indexOffset = ExcelDataHeaderSize + (i * ExcelDataOffsetSize);
++            var rowId = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(indexOffset, sizeof(uint)));
++            var rowOffset = checked((int)BinaryPrimitives.ReadUInt32BigEndian(
++                data.Slice(indexOffset + sizeof(uint), sizeof(uint))));
++            var rowSize = checked((int)BinaryPrimitives.ReadUInt32BigEndian(
++                data.Slice(rowOffset, sizeof(uint))));
++            rows[i] = new PageRow(rowId, rowOffset, rowSize + 6, indexOffset);
++        }
++
++        var physicalRows = rows.OrderBy(row => row.Offset).ToArray();
++        var firstRowOffset = physicalRows[0].Offset;
++        using var output = new MemoryStream(source.Length);
++        output.Write(source, 0, firstRowOffset);
++        var newOffsets = new Dictionary<int, uint>();
++        var sourceCursor = firstRowOffset;
++        foreach (var row in physicalRows)
++        {
++            output.Write(source, sourceCursor, row.Offset - sourceCursor);
++            newOffsets.Add(row.IndexOffset, checked((uint)output.Position));
++            if (overlays.TryGetValue(row.RowId, out var overlay))
++            {
++                var rewritten = RewriteRow(
++                    source.AsSpan(row.Offset, row.Length),
++                    fixedDataSize,
++                    physicalColumns,
++                    overlay);
++                output.Write(rewritten);
++                rewrittenRows.Add(row.RowId);
++            }
++            else
++            {
++                output.Write(source, row.Offset, row.Length);
++            }
++
++            sourceCursor = row.Offset + row.Length;
++        }
++
++        output.Write(source, sourceCursor, source.Length - sourceCursor);
++        var result = output.ToArray();
++        foreach (var row in rows)
++        {
++            BinaryPrimitives.WriteUInt32BigEndian(
++                result.AsSpan(row.IndexOffset + sizeof(uint), sizeof(uint)),
++                newOffsets[row.IndexOffset]);
++        }
++
++        BinaryPrimitives.WriteUInt32BigEndian(
++            result.AsSpan(12, sizeof(uint)),
++            checked((uint)(result.Length - firstRowOffset)));
++        return result;
++    }
++
++    private static byte[] RewriteRow(
++        ReadOnlySpan<byte> source,
++        ushort fixedDataSize,
++        IReadOnlyList<ExcelColumnDefinition> physicalColumns,
++        CsvOverlayRow overlay)
++    {
++        var rowSize = BinaryPrimitives.ReadUInt32BigEndian(source[..sizeof(uint)]);
++        var encodedCells = new List<(ExcelColumnDefinition Column, byte[] Value)>(overlay.Cells.Count);
++        var appendedSize = 0;
++        foreach (var cell in overlay.Cells)
++        {
++            var column = physicalColumns[cell.Column];
++            var bytes = EncodeCell(cell);
++            appendedSize = checked(appendedSize + bytes.Length + 1);
++            encodedCells.Add((column, bytes));
++        }
++
++        var result = new byte[checked(source.Length + appendedSize)];
++        source.CopyTo(result);
++        var originalStringDataSize = checked((int)rowSize - fixedDataSize);
++        var appendOffset = source.Length;
++        foreach (var (column, value) in encodedCells)
++        {
++            var stringOffset = checked((uint)(originalStringDataSize + appendOffset - source.Length));
++            BinaryPrimitives.WriteUInt32BigEndian(
++                result.AsSpan(6 + column.Offset, sizeof(uint)),
++                stringOffset);
++            value.CopyTo(result.AsSpan(appendOffset));
++            appendOffset += value.Length;
++            result[appendOffset++] = 0;
++        }
++
++        BinaryPrimitives.WriteUInt32BigEndian(
++            result.AsSpan(0, sizeof(uint)),
++            checked(rowSize + (uint)appendedSize));
++        return result;
++    }
++
++    private static byte[] EncodeCell(CsvOverlayCell cell)
++    {
++        if (!cell.IsMacroString)
++        {
++            if (cell.Value.IndexOfAny(['\0', '\u0002', '\u0003']) >= 0)
++                throw new InvalidDataException("The CSV overlay UTF-8 cell contains a reserved control character.");
++            return Encoding.UTF8.GetBytes(cell.Value);
++        }
++
++        var value = ReadOnlySeString.FromMacroString(cell.Value, StrictMacroOptions);
++        ReadOnlySpan<byte> bytes = value;
++        if (bytes.Contains((byte)0))
++            throw new InvalidDataException("The CSV overlay cell contains an embedded null byte.");
++        return bytes.ToArray();
++    }
++
++    private readonly record struct PageRow(uint RowId, int Offset, int Length, int IndexOffset);
++}
+diff --git a/Dalamud/Data/Excel/ExcelLanguagePackLoader.cs b/Dalamud/Data/Excel/ExcelLanguagePackLoader.cs
+new file mode 100644
+index 000000000..e1f8d2eb0
+--- /dev/null
++++ b/Dalamud/Data/Excel/ExcelLanguagePackLoader.cs
+@@ -0,0 +1,336 @@
++using System.Collections;
++using System.Collections.Frozen;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Reflection;
++
++using Dalamud.Common.Game;
++using Dalamud.Logging.Internal;
++
++using Lumina;
++using Lumina.Data;
++using Lumina.Data.Files.Excel;
++using Lumina.Excel;
++
++using Newtonsoft.Json;
++
++#pragma warning disable SA1600 // Internal loader implementation.
++
++namespace Dalamud.Data.Excel;
++
++internal sealed class ExcelLanguagePackLoader
++{
++    internal const int CurrentFormatVersion = 2;
++    internal const string ManifestFileName = "language-pack.json";
++
++    private static readonly ModuleLog Log = ModuleLog.Create<ExcelLanguagePackLoader>();
++    private static readonly Lazy<LuminaCacheAccessor> CacheAccessor = new();
++
++    private bool englishLoaded;
++
++    public bool HasLoadedPacks => this.englishLoaded;
++
++    public static ExcelLanguagePackLoader LoadFromAssetDirectory(
++        DirectoryInfo assetDirectory,
++        GameData primaryGameData,
++        GameVersion? gameVersion)
++    {
++        var loader = new ExcelLanguagePackLoader();
++        var packsDirectory = Path.Combine(assetDirectory.FullName, "UIRes", "ExcelLanguagePacks");
++        if (!Directory.Exists(packsDirectory))
++        {
++            Log.Debug("Excel language pack directory is not present: {Directory}", packsDirectory);
++            return loader;
++        }
++
++        string[] manifests;
++        try
++        {
++            manifests = Directory.GetFiles(packsDirectory, ManifestFileName, SearchOption.AllDirectories);
++        }
++        catch (Exception ex)
++        {
++            Log.Error(ex, "Could not enumerate Excel language packs in {Directory}", packsDirectory);
++            return loader;
++        }
++
++        foreach (var manifestPath in manifests.Order(StringComparer.OrdinalIgnoreCase))
++        {
++            try
++            {
++                loader.LoadPack(manifestPath, primaryGameData, gameVersion);
++            }
++            catch (Exception ex)
++            {
++                Log.Error(ex, "Could not load Excel language pack manifest {Manifest}", manifestPath);
++            }
++        }
++
++        return loader;
++    }
++
++    public bool IsLanguageLoaded(Language language) =>
++        this.englishLoaded && language == Language.English;
++
++    internal static string ResolveContainedPath(string packageDirectory, string relativePath)
++    {
++        if (string.IsNullOrWhiteSpace(relativePath))
++            throw new InvalidDataException("The language pack path cannot be empty.");
++        if (Path.IsPathRooted(relativePath))
++            throw new InvalidDataException("The language pack path must be relative to its manifest.");
++
++        var packageRoot = Path.GetFullPath(packageDirectory);
++        var fullPath = Path.GetFullPath(relativePath, packageRoot);
++        var relativeToRoot = Path.GetRelativePath(packageRoot, fullPath);
++        if (relativeToRoot == ".." ||
++            relativeToRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
++            Path.IsPathRooted(relativeToRoot))
++        {
++            throw new InvalidDataException("The language pack path escapes its package directory.");
++        }
++
++        return fullPath;
++    }
++
++    internal static void ValidateLuminaCacheContract() => _ = CacheAccessor.Value;
++
++    internal static ExcelLanguagePackManifest ReadManifest(string manifestPath)
++    {
++        var manifest = JsonConvert.DeserializeObject<ExcelLanguagePackManifest>(File.ReadAllText(manifestPath))
++                       ?? throw new InvalidDataException("The language pack manifest is empty.");
++        if (manifest.FormatVersion != CurrentFormatVersion)
++            throw new InvalidDataException($"Unsupported language pack format {manifest.FormatVersion}.");
++        if (manifest.Source != "csv-overlay")
++            throw new InvalidDataException($"Unsupported language pack source '{manifest.Source}'.");
++        if (manifest.Languages.Count != 1 ||
++            !string.Equals(manifest.Languages[0], "English", StringComparison.Ordinal))
++        {
++            throw new InvalidDataException("The CSV overlay manifest must provide only English.");
++        }
++
++        var packageDirectory = Path.GetDirectoryName(manifestPath)
++                               ?? throw new InvalidDataException("The language pack manifest has no parent directory.");
++        _ = ResolveContainedPath(packageDirectory, manifest.Path);
++        return manifest;
++    }
++
++    private void LoadPack(string manifestPath, GameData primaryGameData, GameVersion? gameVersion)
++    {
++        var manifest = ReadManifest(manifestPath);
++        if (gameVersion is null ||
++            !string.Equals(manifest.GameVersion, gameVersion.ToString(), StringComparison.Ordinal))
++        {
++            Log.Warning(
++                "Skipping Excel language pack {PackId}: built for {PackVersion}, running {GameVersion}",
++                manifest.Id,
++                manifest.GameVersion,
++                gameVersion?.ToString() ?? "unknown");
++            return;
++        }
++
++        if (this.englishLoaded)
++        {
++            Log.Warning(
++                "English Excel data is already supplied by an earlier pack; ignoring {PackId}",
++                manifest.Id);
++            return;
++        }
++
++        var packageDirectory = Path.GetDirectoryName(manifestPath)!;
++        using var stream = File.OpenRead(ResolveContainedPath(packageDirectory, manifest.Path));
++        var pack = CsvOverlayPack.Read(stream);
++        if (!string.Equals(pack.Manifest.GameVersion, manifest.GameVersion, StringComparison.Ordinal))
++            throw new InvalidDataException("The CSV overlay game version does not match its manifest.");
++
++        var count = CacheAccessor.Value.InjectCsvOverlay(primaryGameData.Excel, pack);
++        if (count == 0)
++        {
++            Log.Warning("Skipping Excel language pack {PackId}: no compatible sheets were found", manifest.Id);
++            return;
++        }
++
++        var fallbackCount = CacheAccessor.Value.FillEnglishFallback(primaryGameData.Excel);
++        this.englishLoaded = true;
++        Log.Information(
++            "Injected {SheetCount} English Excel sheets from language pack {PackId}; {FallbackCount} sheets use Simplified Chinese fallback",
++            count,
++            manifest.Id,
++            fallbackCount);
++    }
++
++    private sealed class LuminaCacheAccessor
++    {
++        private readonly PropertyInfo definedSheetCacheProperty;
++        private readonly FieldInfo headerFileField;
++        private readonly FieldInfo languageCacheField;
++        private readonly CsvOverlayRawSheetFactory rawSheetFactory = new();
++
++        public LuminaCacheAccessor()
++        {
++            this.definedSheetCacheProperty = typeof(ExcelModule)
++                                             .GetProperties(
++                                                 BindingFlags.Instance |
++                                                 BindingFlags.Public |
++                                                 BindingFlags.NonPublic)
++                                             .Single(
++                                                 property => property.PropertyType.IsGenericType &&
++                                                             property.PropertyType.GetGenericTypeDefinition() ==
++                                                             typeof(FrozenDictionary<,>) &&
++                                                             property.PropertyType.GenericTypeArguments[0] ==
++                                                             typeof(string));
++
++            var sheetDataType = this.definedSheetCacheProperty.PropertyType.GenericTypeArguments[1];
++            var instanceFields = sheetDataType.GetFields(
++                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
++            this.headerFileField = instanceFields.Single(field => field.FieldType == typeof(ExcelHeaderFile));
++            this.languageCacheField = instanceFields.Single(
++                field => field.FieldType.IsArray &&
++                         field.FieldType.GetElementType() is { IsGenericType: true } elementType &&
++                         elementType.GetGenericTypeDefinition() == typeof(Lazy<>));
++        }
++
++        public int InjectCsvOverlay(ExcelModule module, CsvOverlayPack pack)
++        {
++            var primarySheets = this.GetDefinedSheets(module);
++            var originalLanguageCaches = new Dictionary<object, Array>();
++            var injectedCount = 0;
++            var schemaMismatchCount = 0;
++            try
++            {
++                foreach (var (sheetName, overlay) in pack.Sheets)
++                {
++                    if (!primarySheets.TryGetValue(sheetName, out var sheetData))
++                        continue;
++
++                    var header = (ExcelHeaderFile)this.headerFileField.GetValue(sheetData)!;
++                    if (!CsvOverlayRawSheetFactory.IsCompatible(header, overlay.Definition))
++                    {
++                        schemaMismatchCount++;
++                        continue;
++                    }
++
++                    var languageCache = (Array)this.languageCacheField.GetValue(sheetData)!;
++                    var chineseIndex = (int)Language.ChineseSimplified;
++                    if (chineseIndex >= languageCache.Length ||
++                        languageCache.GetValue(chineseIndex) is not Lazy<RawExcelSheet> chineseSheet)
++                    {
++                        continue;
++                    }
++
++                    var englishSheet = new Lazy<RawExcelSheet>(
++                        () => this.rawSheetFactory.Create(
++                            module,
++                            header,
++                            Language.English,
++                            chineseSheet.Value,
++                            overlay));
++                    if (this.TrySetEnglishCache(sheetData, englishSheet, originalLanguageCaches))
++                        injectedCount++;
++                }
++            }
++            catch
++            {
++                foreach (var (sheetData, originalCache) in originalLanguageCaches)
++                    this.languageCacheField.SetValue(sheetData, originalCache);
++                throw;
++            }
++
++            if (schemaMismatchCount > 0)
++            {
++                Log.Warning(
++                    "Skipped {SheetCount} CSV overlay sheets because their string schemas differ from the primary client",
++                    schemaMismatchCount);
++            }
++
++            return injectedCount;
++        }
++
++        public int FillEnglishFallback(ExcelModule module)
++        {
++            var fallbackCount = 0;
++            foreach (var sheetData in this.GetDefinedSheets(module).Values)
++            {
++                lock (sheetData)
++                {
++                    var languageCache = (Array)this.languageCacheField.GetValue(sheetData)!;
++                    var chineseIndex = (int)Language.ChineseSimplified;
++                    if (chineseIndex >= languageCache.Length ||
++                        languageCache.GetValue(chineseIndex) is not { } chineseSheet)
++                    {
++                        continue;
++                    }
++
++                    var englishIndex = (int)Language.English;
++                    if (englishIndex < languageCache.Length &&
++                        languageCache.GetValue(englishIndex) is not null)
++                    {
++                        continue;
++                    }
++
++                    languageCache = this.EnsureLanguageCacheSize(
++                        sheetData,
++                        languageCache,
++                        englishIndex + 1);
++                    languageCache.SetValue(chineseSheet, englishIndex);
++                    fallbackCount++;
++                }
++            }
++
++            return fallbackCount;
++        }
++
++        private Dictionary<string, object> GetDefinedSheets(ExcelModule module)
++        {
++            var cache = (IEnumerable)this.definedSheetCacheProperty.GetValue(module)!;
++            var result = new Dictionary<string, object>(StringComparer.Ordinal);
++            foreach (var entry in cache)
++            {
++                var entryType = entry.GetType();
++                var key = (string)entryType.GetProperty("Key")!.GetValue(entry)!;
++                var value = entryType.GetProperty("Value")!.GetValue(entry)!;
++                result.Add(key, value);
++            }
++
++            return result;
++        }
++
++        private bool TrySetEnglishCache(
++            object sheetData,
++            Lazy<RawExcelSheet> sheet,
++            IDictionary<object, Array> originalLanguageCaches)
++        {
++            lock (sheetData)
++            {
++                var englishIndex = (int)Language.English;
++                var languageCache = (Array)this.languageCacheField.GetValue(sheetData)!;
++                if (englishIndex < languageCache.Length &&
++                    languageCache.GetValue(englishIndex) is not null)
++                {
++                    return false;
++                }
++
++                originalLanguageCaches.TryAdd(sheetData, (Array)languageCache.Clone());
++                languageCache = this.EnsureLanguageCacheSize(
++                    sheetData,
++                    languageCache,
++                    englishIndex + 1);
++                languageCache.SetValue(sheet, englishIndex);
++                return true;
++            }
++        }
++
++        private Array EnsureLanguageCacheSize(object sheetData, Array languageCache, int requiredLength)
++        {
++            if (languageCache.Length >= requiredLength)
++                return languageCache;
++
++            var expandedCache = Array.CreateInstance(
++                languageCache.GetType().GetElementType()!,
++                requiredLength);
++            Array.Copy(languageCache, expandedCache, languageCache.Length);
++            this.languageCacheField.SetValue(sheetData, expandedCache);
++            return expandedCache;
++        }
++    }
++}
+diff --git a/Dalamud/Data/Excel/ExcelLanguagePackManifest.cs b/Dalamud/Data/Excel/ExcelLanguagePackManifest.cs
+new file mode 100644
+index 000000000..e2be2ffb2
+--- /dev/null
++++ b/Dalamud/Data/Excel/ExcelLanguagePackManifest.cs
+@@ -0,0 +1,28 @@
++using System.Collections.Generic;
++
++using Newtonsoft.Json;
++
++#pragma warning disable SA1600 // Internal asset manifest model.
++
++namespace Dalamud.Data.Excel;
++
++internal sealed class ExcelLanguagePackManifest
++{
++    [JsonProperty("formatVersion", Required = Required.Always)]
++    public int FormatVersion { get; set; }
++
++    [JsonProperty("id", Required = Required.Always)]
++    public string Id { get; set; } = string.Empty;
++
++    [JsonProperty("gameVersion", Required = Required.Always)]
++    public string GameVersion { get; set; } = string.Empty;
++
++    [JsonProperty("source", Required = Required.Always)]
++    public string Source { get; set; } = string.Empty;
++
++    [JsonProperty("path", Required = Required.Always)]
++    public string Path { get; set; } = string.Empty;
++
++    [JsonProperty("languages", Required = Required.Always)]
++    public List<string> Languages { get; set; } = [];
++}
+diff --git a/Dalamud/Data/Excel/LuminaRawSheetFactory.cs b/Dalamud/Data/Excel/LuminaRawSheetFactory.cs
+new file mode 100644
+index 000000000..0bcc05446
+--- /dev/null
++++ b/Dalamud/Data/Excel/LuminaRawSheetFactory.cs
+@@ -0,0 +1,245 @@
++using System.Buffers.Binary;
++using System.Collections.Frozen;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++
++using Lumina.Data;
++using Lumina.Data.Files.Excel;
++using Lumina.Data.Structs.Excel;
++using Lumina.Excel;
++
++#pragma warning disable SA1600 // Internal Lumina reflection implementation.
++
++namespace Dalamud.Data.Excel;
++
++internal sealed class LuminaRawSheetFactory
++{
++    private const int ExcelDataHeaderSize = 32;
++    private const int ExcelDataOffsetSize = 8;
++    private const int MaxUnusedLookupItemCount = 0x10000;
++
++    private readonly ConstructorInfo excelPageConstructor;
++    private readonly ConstructorInfo rowLookupConstructor;
++    private readonly Type rowLookupType;
++    private readonly FieldInfo pagesField;
++    private readonly FieldInfo pageDataField;
++    private readonly FieldInfo rowLookupTableField;
++    private readonly FieldInfo subrowDataOffsetField;
++    private readonly FieldInfo rowIndexLookupDictionaryField;
++    private readonly FieldInfo rowIndexLookupArrayField;
++    private readonly FieldInfo rowIndexLookupArrayOffsetField;
++    private readonly FieldInfo columnHashField;
++    private readonly FieldInfo moduleField;
++    private readonly FieldInfo languageField;
++    private readonly FieldInfo columnsField;
++    private readonly FieldInfo countField;
++
++    public LuminaRawSheetFactory()
++    {
++        var fields = typeof(RawExcelSheet).GetFields(
++            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
++        this.pagesField = fields.Single(field => field.FieldType == typeof(ExcelPage[]));
++        this.rowLookupTableField = fields.Single(
++            field => field.FieldType.IsArray &&
++                     field.FieldType.GetElementType()?.DeclaringType == typeof(RawExcelSheet));
++        this.rowLookupType = this.rowLookupTableField.FieldType.GetElementType()!;
++        this.rowLookupConstructor = this.rowLookupType.GetConstructor(
++                                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
++                                        null,
++                                        [typeof(uint), typeof(uint), typeof(ushort), typeof(ushort)],
++                                        null)
++                                    ?? throw new MissingMethodException("Lumina row lookup constructor was not found.");
++        this.subrowDataOffsetField = fields.Single(
++            field => field.FieldType == typeof(ushort) && !field.Name.Contains("BackingField", StringComparison.Ordinal));
++        this.rowIndexLookupDictionaryField = fields.Single(
++            field => field.FieldType == typeof(FrozenDictionary<int, int>));
++        this.rowIndexLookupArrayField = fields.Single(field => field.FieldType == typeof(int[]));
++        this.columnHashField = GetBackingField(
++            typeof(RawExcelSheet).GetProperty(
++                "ColumnHash",
++                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!);
++        this.rowIndexLookupArrayOffsetField = fields.Single(
++            field => field.FieldType == typeof(uint) && field != this.columnHashField);
++        this.moduleField = GetBackingField(typeof(RawExcelSheet).GetProperty(nameof(RawExcelSheet.Module))!);
++        this.languageField = GetBackingField(typeof(RawExcelSheet).GetProperty(nameof(RawExcelSheet.Language))!);
++        this.columnsField = GetBackingField(typeof(RawExcelSheet).GetProperty(nameof(RawExcelSheet.Columns))!);
++        this.countField = GetBackingField(typeof(RawExcelSheet).GetProperty(nameof(RawExcelSheet.Count))!);
++        this.excelPageConstructor = typeof(ExcelPage).GetConstructor(
++                                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
++                                        null,
++                                        [typeof(RawExcelSheet), typeof(byte[]), typeof(ushort)],
++                                        null)
++                                    ?? throw new MissingMethodException("Lumina Excel page constructor was not found.");
++        this.pageDataField = typeof(ExcelPage)
++                             .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                             .Single(field => field.FieldType == typeof(byte[]));
++    }
++
++    public IReadOnlyList<byte[]?> ClonePageData(RawExcelSheet sheet)
++    {
++        var pages = (ExcelPage[])this.pagesField.GetValue(sheet)!;
++        var result = new byte[]?[pages.Length];
++        for (var i = 0; i < pages.Length; i++)
++        {
++            if (pages[i] is { } page)
++                result[i] = ((byte[])this.pageDataField.GetValue(page)!).ToArray();
++        }
++
++        return result;
++    }
++
++    public uint GetColumnHash(RawExcelSheet sheet) => (uint)this.columnHashField.GetValue(sheet)!;
++
++    public RawExcelSheet Create(
++        ExcelModule module,
++        ExcelHeaderFile header,
++        Language language,
++        uint columnHash,
++        IReadOnlyList<byte[]?> pageData)
++    {
++        if (pageData.Count > ushort.MaxValue)
++            throw new InvalidDataException("An Excel sheet contains too many EXDF pages.");
++
++        var sheet = (RawExcelSheet)RuntimeHelpers.GetUninitializedObject(typeof(RawExcelSheet));
++        this.moduleField.SetValue(sheet, module);
++        this.languageField.SetValue(sheet, language);
++        this.columnsField.SetValue(sheet, header.ColumnDefinitions);
++        this.columnHashField.SetValue(sheet, columnHash);
++        this.subrowDataOffsetField.SetValue(sheet, (ushort)0);
++
++        var pages = new ExcelPage[pageData.Count];
++        var rows = new List<ParsedRow>(checked((int)header.Header.RowCount));
++        for (ushort pageIndex = 0; pageIndex < pageData.Count; pageIndex++)
++        {
++            var data = pageData[pageIndex];
++            if (data is null)
++                continue;
++
++            ValidatePageAndReadRows(data, pageIndex, rows);
++            pages[pageIndex] = (ExcelPage)this.excelPageConstructor.Invoke(
++                [sheet, data, header.Header.DataOffset]);
++        }
++
++        rows.Sort(static (left, right) => left.RowId.CompareTo(right.RowId));
++        for (var i = 1; i < rows.Count; i++)
++        {
++            if (rows[i - 1].RowId == rows[i].RowId)
++                throw new InvalidDataException($"An Excel sheet contains duplicate row {rows[i].RowId}.");
++        }
++
++        var rowLookupTable = Array.CreateInstance(this.rowLookupType, rows.Count);
++        for (var i = 0; i < rows.Count; i++)
++        {
++            var row = rows[i];
++            rowLookupTable.SetValue(
++                this.rowLookupConstructor.Invoke([row.RowId, row.Offset, row.PageIndex, row.SubrowCount]),
++                i);
++        }
++
++        BuildRowIndex(rows, out var lookupArray, out var lookupOffset, out var lookupDictionary);
++        this.pagesField.SetValue(sheet, pages);
++        this.rowLookupTableField.SetValue(sheet, rowLookupTable);
++        this.rowIndexLookupArrayField.SetValue(sheet, lookupArray);
++        this.rowIndexLookupArrayOffsetField.SetValue(sheet, lookupOffset);
++        this.rowIndexLookupDictionaryField.SetValue(sheet, lookupDictionary);
++        this.countField.SetValue(sheet, rows.Count);
++        return sheet;
++    }
++
++    private static void ValidatePageAndReadRows(
++        byte[] pageData,
++        ushort pageIndex,
++        List<ParsedRow> rows)
++    {
++        var data = pageData.AsSpan();
++        if (data.Length < ExcelDataHeaderSize || !data[..4].SequenceEqual("EXDF"u8))
++            throw new InvalidDataException("An Excel sheet contains an invalid EXD page.");
++
++        var indexSize = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(8, sizeof(uint)));
++        if (indexSize % ExcelDataOffsetSize != 0 ||
++            indexSize > int.MaxValue ||
++            ExcelDataHeaderSize + (int)indexSize > data.Length)
++        {
++            throw new InvalidDataException("An Excel sheet contains an invalid EXD row index.");
++        }
++
++        var rowCount = checked((int)(indexSize / ExcelDataOffsetSize));
++        for (var i = 0; i < rowCount; i++)
++        {
++            var indexOffset = ExcelDataHeaderSize + (i * ExcelDataOffsetSize);
++            var rowId = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(indexOffset, sizeof(uint)));
++            var dataOffset = BinaryPrimitives.ReadUInt32BigEndian(
++                data.Slice(indexOffset + sizeof(uint), sizeof(uint)));
++            if (dataOffset > data.Length - 6)
++                throw new InvalidDataException("An Excel sheet contains an invalid EXD row offset.");
++
++            var rowOffset = checked((int)dataOffset);
++            var rowSize = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(rowOffset, sizeof(uint)));
++            if (rowSize > data.Length - rowOffset - 6)
++                throw new InvalidDataException("An Excel sheet contains an invalid EXD row size.");
++
++            rows.Add(new ParsedRow(rowId, dataOffset + 6, pageIndex, 1));
++        }
++    }
++
++    private static void BuildRowIndex(
++        IReadOnlyList<ParsedRow> rows,
++        out int[] lookupArray,
++        out uint lookupOffset,
++        out FrozenDictionary<int, int> lookupDictionary)
++    {
++        if (rows.Count == 0)
++        {
++            lookupArray = [];
++            lookupOffset = 0;
++            lookupDictionary = FrozenDictionary<int, int>.Empty;
++            return;
++        }
++
++        lookupOffset = rows[0].RowId;
++        var slotCount = (ulong)rows[^1].RowId - lookupOffset + 1;
++        var unusedSlotCount = slotCount - (ulong)rows.Count;
++        if (unusedSlotCount <= MaxUnusedLookupItemCount && slotCount <= int.MaxValue)
++        {
++            lookupArray = new int[(int)slotCount];
++            lookupArray.AsSpan().Fill(-1);
++            for (var i = 0; i < rows.Count; i++)
++                lookupArray[checked((int)(rows[i].RowId - lookupOffset))] = i;
++            lookupDictionary = FrozenDictionary<int, int>.Empty;
++            return;
++        }
++
++        lookupArray = new int[MaxUnusedLookupItemCount];
++        lookupArray.AsSpan().Fill(-1);
++        var splitIndex = 0;
++        var lastArrayIndex = 0;
++        for (; splitIndex < rows.Count; splitIndex++)
++        {
++            var index = rows[splitIndex].RowId - lookupOffset;
++            if (index >= lookupArray.Length)
++                break;
++
++            lookupArray[checked((int)index)] = splitIndex;
++            lastArrayIndex = checked((int)index);
++        }
++
++        Array.Resize(ref lookupArray, lastArrayIndex + 1);
++        lookupDictionary = rows
++                           .Skip(splitIndex)
++                           .Select((row, offset) => new KeyValuePair<int, int>(
++                               checked((int)row.RowId),
++                               splitIndex + offset))
++                           .ToFrozenDictionary();
++    }
++
++    private static FieldInfo GetBackingField(PropertyInfo property) =>
++        property.DeclaringType?.GetField(
++            $"<{property.Name}>k__BackingField",
++            BindingFlags.Instance | BindingFlags.NonPublic)
++        ?? throw new MissingFieldException(property.DeclaringType?.FullName, property.Name);
++
++    private readonly record struct ParsedRow(uint RowId, uint Offset, ushort PageIndex, ushort SubrowCount);
++}
+diff --git a/Dalamud/Game/ClientLanguage.cs b/Dalamud/Game/ClientLanguage.cs
+index e42cc32c5..bb4212f5b 100644
+--- a/Dalamud/Game/ClientLanguage.cs
++++ b/Dalamud/Game/ClientLanguage.cs
+@@ -27,4 +27,9 @@ public enum ClientLanguage
+     /// Indicating a French game client.
+     /// </summary>
+     French,
++
++    /// <summary>
++    /// Indicating a Simplified Chinese game client.
++    /// </summary>
++    ChineseSimplified,
+ }
+diff --git a/Dalamud/Game/Internal/AutoCompletionIntegration.cs b/Dalamud/Game/Internal/AutoCompletionIntegration.cs
+index ec390d7e7..abf5c85a1 100644
+--- a/Dalamud/Game/Internal/AutoCompletionIntegration.cs
++++ b/Dalamud/Game/Internal/AutoCompletionIntegration.cs
+@@ -1,4 +1,5 @@
+ using System.Collections.Generic;
++using System.IO;
+ using System.Linq;
+ using System.Runtime.InteropServices;
+ 
+@@ -13,6 +14,10 @@ using FFXIVClientStructs.FFXIV.Component.Completion;
+ using FFXIVClientStructs.FFXIV.Component.GUI;
+ using FFXIVClientStructs.Interop;
+ 
++using Iced.Intel;
++
++using static Iced.Intel.AssemblerRegisters;
++
+ namespace Dalamud.Game.Internal;
+ 
+ /// <summary>
+@@ -25,6 +30,8 @@ internal sealed unsafe class AutoCompletionIntegration : IInternalDisposableServ
+     // as raw strings instead of as lookups into an EXD sheet
+     private const int GroupNumber = 0xFF;
+ 
++    private static MyHookDelegate callback = null!;
++
+     [ServiceManager.ServiceDependency]
+     private readonly CommandManager commandManager = Service<CommandManager>.Get();
+ 
+@@ -35,7 +42,7 @@ internal sealed unsafe class AutoCompletionIntegration : IInternalDisposableServ
+ 
+     private EntryStrings? dalamudCategory;
+ 
+-    private Hook<AtkTextInput.Delegates.OpenCompletion> openSuggestionsHook;
++    private AsmHook openSuggestionsHook;
+     private Hook<CompletionModule.Delegates.GetSelection>? getSelectionHook;
+ 
+     /// <summary>
+@@ -47,6 +54,12 @@ internal sealed unsafe class AutoCompletionIntegration : IInternalDisposableServ
+         this.framework.RunOnTick(this.Setup);
+     }
+ 
++    /// <summary>
++    /// Invokes the completion data update injected by the CN client hook.
++    /// </summary>
++    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++    private delegate void MyHookDelegate();
++
+     /// <inheritdoc/>
+     void IInternalDisposableService.DisposeService()
+     {
+@@ -72,9 +85,19 @@ internal sealed unsafe class AutoCompletionIntegration : IInternalDisposableServ
+ 
+         this.dalamudCategory = new EntryStrings("【Dalamud】");
+ 
+-        this.openSuggestionsHook = Hook<AtkTextInput.Delegates.OpenCompletion>.FromAddress(
+-            (nint)AtkTextInput.MemberFunctionPointers.OpenCompletion,
+-            this.OpenSuggestionsDetour);
++        var openSuggestionsAddress = Service<TargetSigScanner>.Get().ScanText("4C 8D 86 ?? ?? ?? ?? 48 8B CE 48 8D 96 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 4E");
++        callback = this.UpdateCompletionData;
++        var callbackPtr = Marshal.GetFunctionPointerForDelegate(callback);
++
++        var assembler = new Assembler(64);
++        assembler.mov(rax, (ulong)callbackPtr);
++        assembler.call(rax);
++        var stream = new MemoryStream();
++        var writer = new StreamCodeWriter(stream);
++        assembler.Assemble(writer, 0);
++        var bytes = stream.ToArray();
++
++        this.openSuggestionsHook = new AsmHook(openSuggestionsAddress, bytes, "openSuggestionsAsmHook");
+ 
+         this.getSelectionHook = Hook<CompletionModule.Delegates.GetSelection>.FromAddress(
+             (nint)uiModule->CompletionModule.VirtualTable->GetSelection,
+@@ -84,12 +107,6 @@ internal sealed unsafe class AutoCompletionIntegration : IInternalDisposableServ
+         this.getSelectionHook.Enable();
+     }
+ 
+-    private void OpenSuggestionsDetour(AtkTextInput* thisPtr)
+-    {
+-        this.UpdateCompletionData();
+-        this.openSuggestionsHook!.Original(thisPtr);
+-    }
+-
+     private int GetSelectionDetour(CompletionModule* thisPtr, CategoryData.CompletionDataStruct* dataStructs, int index, Utf8String* outputString, Utf8String* outputDisplayString)
+     {
+         var ret = this.getSelectionHook!.Original.Invoke(thisPtr, dataStructs, index, outputString, outputDisplayString);
+diff --git a/Dalamud/Game/Text/Sanitizer/Sanitizer.cs b/Dalamud/Game/Text/Sanitizer/Sanitizer.cs
+index 3966d3b89..d6878d81d 100644
+--- a/Dalamud/Game/Text/Sanitizer/Sanitizer.cs
++++ b/Dalamud/Game/Text/Sanitizer/Sanitizer.cs
+@@ -76,7 +76,7 @@ public class Sanitizer : ISanitizer
+         var sanitizedString = FilterUnprintableCharacters(unsanitizedString);
+         return clientLanguage switch
+         {
+-            ClientLanguage.Japanese or ClientLanguage.English => sanitizedString,
++            ClientLanguage.ChineseSimplified or ClientLanguage.Japanese or ClientLanguage.English => sanitizedString,
+             ClientLanguage.German => FilterByDict(sanitizedString, DESanitizationDict),
+             ClientLanguage.French => FilterByDict(sanitizedString, FRSanitizationDict),
+             _ => throw new ArgumentOutOfRangeException(nameof(clientLanguage), clientLanguage, null),
+@@ -91,6 +91,7 @@ public class Sanitizer : ISanitizer
+             ClientLanguage.English => unsanitizedStrings.Select(FilterUnprintableCharacters),
+             ClientLanguage.German => unsanitizedStrings.Select(original => FilterByDict(FilterUnprintableCharacters(original), DESanitizationDict)),
+             ClientLanguage.French => unsanitizedStrings.Select(original => FilterByDict(FilterUnprintableCharacters(original), FRSanitizationDict)),
++            ClientLanguage.ChineseSimplified => unsanitizedStrings.Select(FilterUnprintableCharacters),
+             _ => throw new ArgumentOutOfRangeException(nameof(clientLanguage), clientLanguage, null),
+         };
+     }
+diff --git a/Dalamud/Interface/FontIdentifier/IFontFamilyId.cs b/Dalamud/Interface/FontIdentifier/IFontFamilyId.cs
+index 07625de8c..e9c6c8670 100644
+--- a/Dalamud/Interface/FontIdentifier/IFontFamilyId.cs
++++ b/Dalamud/Interface/FontIdentifier/IFontFamilyId.cs
+@@ -37,6 +37,7 @@ public interface IFontFamilyId : IObjectWithLocalizableName
+     /// <returns>The list of fonts.</returns>
+     static List<IFontFamilyId> ListDalamudFonts() =>
+         [
++            new DalamudAssetFontAndFamilyId(DalamudAsset.NotoSansScMedium),
+             new DalamudAssetFontAndFamilyId(DalamudAsset.NotoSansCjkMedium),
+             new DalamudAssetFontAndFamilyId(DalamudAsset.NotoSansCjkRegular),
+             new DalamudAssetFontAndFamilyId(DalamudAsset.InconsolataRegular),
+diff --git a/Dalamud/Interface/GameFonts/GameFontFamilyAndSize.cs b/Dalamud/Interface/GameFonts/GameFontFamilyAndSize.cs
+index 6e66cf19b..6c3f13547 100644
+--- a/Dalamud/Interface/GameFonts/GameFontFamilyAndSize.cs
++++ b/Dalamud/Interface/GameFonts/GameFontFamilyAndSize.cs
+@@ -23,7 +23,7 @@ public enum GameFontFamilyAndSize
+     ///
+     /// Contains Japanese characters in addition to Latin characters. Used in game for the whole UI.
+     /// </summary>
+-    [GameFontFamilyAndSize("common/font/AXIS_12.fdt", "common/font/font{0}.tex", -1)]
++    [GameFontFamilyAndSize("common/font/chnaxis_120.fdt", "common/font/font_chn_{0}.tex", -1)]
+     Axis12,
+ 
+     /// <summary>
+@@ -31,7 +31,7 @@ public enum GameFontFamilyAndSize
+     ///
+     /// Contains Japanese characters in addition to Latin characters. Used in game for the whole UI.
+     /// </summary>
+-    [GameFontFamilyAndSize("common/font/AXIS_14.fdt", "common/font/font{0}.tex", -1)]
++    [GameFontFamilyAndSize("common/font/chnaxis_140.fdt", "common/font/font_chn_{0}.tex", -1)]
+     Axis14,
+ 
+     /// <summary>
+@@ -39,7 +39,7 @@ public enum GameFontFamilyAndSize
+     ///
+     /// Contains Japanese characters in addition to Latin characters. Used in game for the whole UI.
+     /// </summary>
+-    [GameFontFamilyAndSize("common/font/AXIS_18.fdt", "common/font/font{0}.tex", -1)]
++    [GameFontFamilyAndSize("common/font/chnaxis_180.fdt", "common/font/font_chn_{0}.tex", -1)]
+     Axis18,
+ 
+     /// <summary>
+@@ -47,7 +47,7 @@ public enum GameFontFamilyAndSize
+     ///
+     /// Contains Japanese characters in addition to Latin characters. Used in game for the whole UI.
+     /// </summary>
+-    [GameFontFamilyAndSize("common/font/AXIS_36.fdt", "common/font/font{0}.tex", -4)]
++    [GameFontFamilyAndSize("common/font/chnaxis_360.fdt", "common/font/font_chn_{0}.tex", -4)]
+     Axis36,
+ 
+     /// <summary>
+@@ -193,4 +193,12 @@ public enum GameFontFamilyAndSize
+     /// </summary>
+     [GameFontFamilyAndSize("common/font/TrumpGothic_68.fdt", "common/font/font{0}.tex", -3)]
+     TrumpGothic68,
++
++    /// <summary>
++    /// AXIS (12pt)
++    ///
++    /// Contains Japanese characters in addition to Latin characters. Used in game for the whole UI.
++    /// </summary>
++    [GameFontFamilyAndSize("common/font/AXIS_12.fdt", "common/font/font{0}.tex", -1)]
++    AxisIME,
+ }
+diff --git a/Dalamud/Interface/GameFonts/GameFontStyle.cs b/Dalamud/Interface/GameFonts/GameFontStyle.cs
+index fbaf9de07..86ce9a82c 100644
+--- a/Dalamud/Interface/GameFonts/GameFontStyle.cs
++++ b/Dalamud/Interface/GameFonts/GameFontStyle.cs
+@@ -106,6 +106,7 @@ public struct GameFontStyle
+         GameFontFamilyAndSize.TrumpGothic23 => GameFontFamily.TrumpGothic,
+         GameFontFamilyAndSize.TrumpGothic34 => GameFontFamily.TrumpGothic,
+         GameFontFamilyAndSize.TrumpGothic68 => GameFontFamily.TrumpGothic,
++        GameFontFamilyAndSize.AxisIME => GameFontFamily.Axis,
+         _ => throw new InvalidOperationException(),
+     };
+ 
+@@ -114,7 +115,7 @@ public struct GameFontStyle
+     /// </summary>
+     public readonly GameFontFamilyAndSize FamilyWithMinimumSize => this.Family switch
+     {
+-        GameFontFamily.Axis => GameFontFamilyAndSize.Axis96,
++        GameFontFamily.Axis => GameFontFamilyAndSize.Axis12,
+         GameFontFamily.Jupiter => GameFontFamilyAndSize.Jupiter16,
+         GameFontFamily.JupiterNumeric => GameFontFamilyAndSize.Jupiter45,
+         GameFontFamily.Meidinger => GameFontFamilyAndSize.Meidinger16,
+@@ -152,6 +153,7 @@ public struct GameFontStyle
+         GameFontFamilyAndSize.TrumpGothic23 => 23,
+         GameFontFamilyAndSize.TrumpGothic34 => 34,
+         GameFontFamilyAndSize.TrumpGothic68 => 68,
++        GameFontFamilyAndSize.AxisIME => 12,
+         _ => throw new InvalidOperationException(),
+     };
+ 
+@@ -191,7 +193,6 @@ public struct GameFontStyle
+             GameFontFamily.Undefined => GameFontFamilyAndSize.Undefined,
+             GameFontFamily.Axis => size switch
+             {
+-                <= ((int)((9.6f * 4f / 3f) + 0.5f) * 3f / 4f) + 0.001f => GameFontFamilyAndSize.Axis96,
+                 <= ((int)((12f * 4f / 3f) + 0.5f) * 3f / 4f) + 0.001f => GameFontFamilyAndSize.Axis12,
+                 <= ((int)((14f * 4f / 3f) + 0.5f) * 3f / 4f) + 0.001f => GameFontFamilyAndSize.Axis14,
+                 <= ((int)((18f * 4f / 3f) + 0.5f) * 3f / 4f) + 0.001f => GameFontFamilyAndSize.Axis18,
+diff --git a/Dalamud/Interface/Internal/DalamudIme.cs b/Dalamud/Interface/Internal/DalamudIme.cs
+index 6ae20e4e9..87b7a5191 100644
+--- a/Dalamud/Interface/Internal/DalamudIme.cs
++++ b/Dalamud/Interface/Internal/DalamudIme.cs
+@@ -187,7 +187,7 @@ internal sealed unsafe class DalamudIme : IInternalDisposableService
+                 if (HanRange.Any(x => x.FirstCodePoint <= chr && chr < x.FirstCodePoint + x.Length))
+                 {
+                     if (Service<FontAtlasFactory>.Get()
+-                                                 ?.GetFdtReader(GameFontFamilyAndSize.Axis12)
++                                                 ?.GetFdtReader(GameFontFamilyAndSize.AxisIME)
+                                                  .FindGlyph(chr) is null)
+                     {
+                         this.EncounteredHan = true;
+diff --git a/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.BuildToolkit.cs b/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.BuildToolkit.cs
+index 173b6d6a5..54e7bf91f 100644
+--- a/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.BuildToolkit.cs
++++ b/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.BuildToolkit.cs
+@@ -634,7 +634,7 @@ internal sealed partial class FontAtlasFactory
+             if (this.data.ConfigData.Length == 0)
+             {
+                 this.AddDalamudAssetFont(
+-                    DalamudAsset.NotoSansCjkRegular,
++                    DalamudAsset.NotoSansScMedium,
+                     new() { GlyphRanges = [' ', ' ', '\0'], SizePx = 1 });
+             }
+ 
+diff --git a/Dalamud/Interface/ManagedFontAtlas/Internals/GamePrebakedFontHandle.cs b/Dalamud/Interface/ManagedFontAtlas/Internals/GamePrebakedFontHandle.cs
+index 67d8bc27a..996c6b8e5 100644
+--- a/Dalamud/Interface/ManagedFontAtlas/Internals/GamePrebakedFontHandle.cs
++++ b/Dalamud/Interface/ManagedFontAtlas/Internals/GamePrebakedFontHandle.cs
+@@ -413,7 +413,7 @@ internal class GamePrebakedFontHandle : FontHandle
+         private ImFontPtr CreateTemplateFont(IFontAtlasBuildToolkitPreBuild toolkitPreBuild, float sizePx)
+         {
+             var font = toolkitPreBuild.AddDalamudAssetFont(
+-                DalamudAsset.NotoSansCjkMedium,
++                DalamudAsset.NotoSansScMedium,
+                 new()
+                 {
+                     GlyphRanges = [' ', ' ', '\0'],
+diff --git a/Dalamud/Plugin/IDalamudPluginInterface.cs b/Dalamud/Plugin/IDalamudPluginInterface.cs
+index 7fe6d3f36..1a8d415c3 100644
+--- a/Dalamud/Plugin/IDalamudPluginInterface.cs
++++ b/Dalamud/Plugin/IDalamudPluginInterface.cs
+@@ -59,9 +59,9 @@ public interface IDalamudPluginInterface : IServiceProvider
+     /// <summary>
+     /// Gets the repository from which this plugin was installed.
+     ///
+-    /// If a plugin was installed from the official/main repository, this will return the value of
+-    /// <see cref="SpecialPluginSource.MainRepo"/>. Developer plugins will return the value of
+-    /// <see cref="SpecialPluginSource.DevPlugin"/>.
++    /// Standalone installations normally return the exact configured custom repository URL. Plugins imported
++    /// from an older official installation may retain the legacy <see cref="SpecialPluginSource.MainRepo"/> marker,
++    /// and developer plugins return <see cref="SpecialPluginSource.DevPlugin"/>.
+     /// </summary>
+     string SourceRepository { get; }
+ 
+@@ -70,7 +70,7 @@ public interface IDalamudPluginInterface : IServiceProvider
+     /// </summary>
+     string InternalName { get; }
+ 
+-    /// <summary> 
++    /// <summary>
+     /// Gets the unique working plugin ID set by Dalamud.
+     /// </summary>
+     Guid WorkingPluginId { get; }
+diff --git a/Dalamud/Plugin/Internal/Types/Manifest/IPluginManifest.cs b/Dalamud/Plugin/Internal/Types/Manifest/IPluginManifest.cs
+index 9f9fc5635..582dd7d2d 100644
+--- a/Dalamud/Plugin/Internal/Types/Manifest/IPluginManifest.cs
++++ b/Dalamud/Plugin/Internal/Types/Manifest/IPluginManifest.cs
+@@ -20,11 +20,21 @@ public interface IPluginManifest
+     /// </summary>
+     string Name { get; }
+ 
++    /// <summary>
++    /// Gets the localized public name of the plugin, if any.
++    /// </summary>
++    public string? NameLoc { get; }
++
+     /// <summary>
+     /// Gets a punchline of the plugins functions.
+     /// </summary>
+     string? Punchline { get; }
+ 
++    /// <summary>
++    /// Gets the localized punchline of the plugins functions, if any.
++    /// </summary>
++    public string? PunchlineLoc { get; }
++
+     /// <summary>
+     /// Gets the author/s of the plugin.
+     /// </summary>
+@@ -91,6 +101,11 @@ public interface IPluginManifest
+     /// </summary>
+     string? Description { get; }
+ 
++    /// <summary>
++    /// Gets the localized description of the plugins functions, if any.
++    /// </summary>
++    public string? DescriptionLoc { get; }
++
+     /// <summary>
+     /// Gets a message that is shown to users when sending feedback.
+     /// </summary>
+diff --git a/Dalamud/Plugin/Internal/Types/Manifest/RemotePluginManifest.cs b/Dalamud/Plugin/Internal/Types/Manifest/RemotePluginManifest.cs
+index ef3281a4e..d484658a4 100644
+--- a/Dalamud/Plugin/Internal/Types/Manifest/RemotePluginManifest.cs
++++ b/Dalamud/Plugin/Internal/Types/Manifest/RemotePluginManifest.cs
+@@ -11,6 +11,12 @@ namespace Dalamud.Plugin.Internal.Types.Manifest;
+ [UsedImplicitly]
+ internal record RemotePluginManifest : PluginManifest
+ {
++    /// <summary>
++    /// Gets a value indicating whether the CN repository supplies this plugin.
++    /// </summary>
++    [JsonProperty("_cn")]
++    public bool IsCn { get; init; }
++
+     /// <summary>
+     /// Gets or sets the plugin repository this manifest came from. Used in reporting which third party repo a manifest
+     /// may have come from in the plugins available view. This functionality should not be included in the plugin master.
+diff --git a/Dalamud/Plugin/Internal/Types/PluginManifest.cs b/Dalamud/Plugin/Internal/Types/PluginManifest.cs
+index 3387661fd..71cb4a7fa 100644
+--- a/Dalamud/Plugin/Internal/Types/PluginManifest.cs
++++ b/Dalamud/Plugin/Internal/Types/PluginManifest.cs
+@@ -21,14 +21,26 @@ internal record PluginManifest : IPluginManifest
+     [JsonProperty]
+     public string Name { get; set; } = null!;
+ 
++    /// <inheritdoc/>
++    [JsonProperty]
++    public string? NameLoc { get; init; }
++
+     /// <inheritdoc/>
+     [JsonProperty]
+     public string? Punchline { get; init; }
+ 
++    /// <inheritdoc/>
++    [JsonProperty]
++    public string? PunchlineLoc { get; init; }
++
+     /// <inheritdoc/>
+     [JsonProperty]
+     public string? Description { get; init; }
+ 
++    /// <inheritdoc/>
++    [JsonProperty]
++    public string? DescriptionLoc { get; init; }
++
+     /// <inheritdoc/>
+     [JsonProperty]
+     public string? Changelog { get; init; }
+diff --git a/Dalamud/Plugin/Services/IGamepadState.cs b/Dalamud/Plugin/Services/IGamepadState.cs
+index 79ee1a2d0..f1f5aaf6a 100644
+--- a/Dalamud/Plugin/Services/IGamepadState.cs
++++ b/Dalamud/Plugin/Services/IGamepadState.cs
+@@ -17,7 +17,7 @@ public interface IGamepadState : IDalamudService
+     nint GamepadInputAddress { get; }
+ 
+     /// <summary>
+-    /// Gets or sets a value indicating whether gamepad input is intercepted for ImGui navigation, 
++    /// Gets or sets a value indicating whether gamepad input is intercepted for ImGui navigation,
+     /// preventing it from passing through to the game.
+     /// </summary>
+     public bool EnableGamepadNav { get; set; }
+diff --git a/Dalamud/Plugin/Services/IKeyState.cs b/Dalamud/Plugin/Services/IKeyState.cs
+index 81a5231e5..a2f31d53f 100644
+--- a/Dalamud/Plugin/Services/IKeyState.cs
++++ b/Dalamud/Plugin/Services/IKeyState.cs
+@@ -15,7 +15,7 @@ namespace Dalamud.Plugin.Services;
+ /// index &amp; 1 = key down (ephemeral).
+ /// index &amp; 2 = key up (ephemeral).
+ /// index &amp; 3 = short key press (ephemeral).
+-/// 
++///
+ /// <para>
+ /// Virtual keys are tracked through two methods:
+ /// <list type="bullet">
+diff --git a/Dalamud/Utility/ClientLanguageExtensions.cs b/Dalamud/Utility/ClientLanguageExtensions.cs
+index 47f0a2082..c314db1ed 100644
+--- a/Dalamud/Utility/ClientLanguageExtensions.cs
++++ b/Dalamud/Utility/ClientLanguageExtensions.cs
+@@ -20,6 +20,7 @@ public static class ClientLanguageExtensions
+             ClientLanguage.English => Lumina.Data.Language.English,
+             ClientLanguage.German => Lumina.Data.Language.German,
+             ClientLanguage.French => Lumina.Data.Language.French,
++            ClientLanguage.ChineseSimplified => Lumina.Data.Language.ChineseSimplified,
+             _ => throw new ArgumentOutOfRangeException(nameof(language)),
+         };
+     }
+@@ -28,7 +29,7 @@ public static class ClientLanguageExtensions
+     /// Gets the language code from a ClientLanguage.
+     /// </summary>
+     /// <param name="value">The ClientLanguage to convert.</param>
+-    /// <returns>The language code (ja, en, de, fr).</returns>
++    /// <returns>The language code (ja, en, de, fr, chs).</returns>
+     /// <exception cref="ArgumentOutOfRangeException">An exception that is thrown when no valid ClientLanguage was given.</exception>
+     public static string ToCode(this ClientLanguage value)
+     {
+@@ -38,6 +39,7 @@ public static class ClientLanguageExtensions
+             ClientLanguage.English => "en",
+             ClientLanguage.German => "de",
+             ClientLanguage.French => "fr",
++            ClientLanguage.ChineseSimplified => "chs",
+             _ => throw new ArgumentOutOfRangeException(nameof(value)),
+         };
+     }
+@@ -45,7 +47,7 @@ public static class ClientLanguageExtensions
+     /// <summary>
+     /// Gets the ClientLanguage from a language code.
+     /// </summary>
+-    /// <param name="value">The language code to convert (ja, en, de, fr).</param>
++    /// <param name="value">The language code to convert (ja, en, de, fr, chs).</param>
+     /// <returns>The ClientLanguage.</returns>
+     /// <exception cref="ArgumentOutOfRangeException">An exception that is thrown when no valid language code was given.</exception>
+     public static ClientLanguage ToClientLanguage(this string value)
+@@ -56,6 +58,7 @@ public static class ClientLanguageExtensions
+             "en" => ClientLanguage.English,
+             "de" => ClientLanguage.German,
+             "fr" => ClientLanguage.French,
++            "chs" => ClientLanguage.ChineseSimplified,
+             _ => throw new ArgumentOutOfRangeException(nameof(value)),
+         };
+     }
