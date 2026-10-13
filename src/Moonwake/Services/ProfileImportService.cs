@@ -57,7 +57,7 @@ internal sealed class ProfileImportService(StandalonePaths paths)
         {
             RejectLinks(configurationPath);
             var config = ReadObject(configurationPath);
-            if (config["ThirdRepoList"] is JsonArray repos)
+            if (RepositoryArray(config) is { } repos)
                 foreach (var item in repos.OfType<JsonObject>())
                 {
                     var url = item["Url"]?.GetValue<string>();
@@ -125,7 +125,7 @@ internal sealed class ProfileImportService(StandalonePaths paths)
         var globalPath = paths.DalamudConfigurationPath;
         var original = File.Exists(globalPath) ? File.ReadAllText(globalPath) : null;
         var global = original is null ? new JsonObject() : JsonNode.Parse(original)?.AsObject() ?? throw new InvalidDataException("Moonwake 配置无效。");
-        var repositories = global["ThirdRepoList"] as JsonArray ?? new JsonArray();
+        var repositories = RepositoryArray(global) ?? new JsonArray();
         if (global["ThirdRepoList"] is null) global["ThirdRepoList"] = repositories;
         var addedRepos = 0;
         foreach (var url in selectedRepositories)
@@ -166,6 +166,14 @@ internal sealed class ProfileImportService(StandalonePaths paths)
     }
 
     private static JsonObject ReadObject(string file) => JsonNode.Parse(File.ReadAllText(file))?.AsObject() ?? throw new InvalidDataException("配置内容为空。");
+
+    private static JsonArray? RepositoryArray(JsonObject configuration) => configuration["ThirdRepoList"] switch
+    {
+        null => null,
+        JsonArray array => array,
+        JsonObject wrapper when wrapper["$values"] is JsonArray array => array,
+        _ => throw new InvalidDataException("插件仓库列表格式无效。"),
+    };
 
     private static void CopyTree(string source, string destination)
     {

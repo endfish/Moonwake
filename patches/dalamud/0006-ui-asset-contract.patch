@@ -1,0 +1,56 @@
+diff --git a/Dalamud.Injector/Program.cs b/Dalamud.Injector/Program.cs
+index b0903f2c7..6fd555f07 100644
+--- a/Dalamud.Injector/Program.cs
++++ b/Dalamud.Injector/Program.cs
+@@ -609,8 +609,8 @@ namespace Dalamud.Injector
+             {
+                 var result = Windows.Win32.PInvoke.MessageBox(
+                     HWND.Null,
+-                    $"Take care: you are manually injecting Dalamud into FFXIV({string.Join(", ", processes.Select(x => $"{x.Id}"))}).\n\nIf you are doing this to use plugins before they are officially whitelisted on patch days, things may go wrong and you may get into trouble.\nWe discourage you from doing this and you won't be warned again in-game.",
+-                    "Dalamud",
++                    $"即将向 FFXIV 进程 {string.Join(", ", processes.Select(x => $"{x.Id}"))} 注入 Moonwake 核心。\n\n当前为手动验证流程。客户端更新后的兼容性需要实际测试；签名检查通过不代表全部功能正常。\n\n点击“确定”继续，或点击“取消”结束本次注入。",
++                    "Moonwake · 手动注入",
+                     MESSAGEBOX_STYLE.MB_ICONWARNING | MESSAGEBOX_STYLE.MB_OKCANCEL);
+ 
+                 if (result == MESSAGEBOX_RESULT.IDCANCEL)
+diff --git a/Dalamud.Test/Storage/AssetDefinitionTests.cs b/Dalamud.Test/Storage/AssetDefinitionTests.cs
+new file mode 100644
+index 000000000..0a25d1d93
+--- /dev/null
++++ b/Dalamud.Test/Storage/AssetDefinitionTests.cs
+@@ -0,0 +1,17 @@
++using Dalamud.Storage.Assets;
++
++using Xunit;
++
++namespace Dalamud.Test.Storage;
++
++public class AssetDefinitionTests
++{
++    [Fact]
++    public void WhiteTextureUsesEmbeddedData()
++    {
++        var attribute = DalamudAsset.White4X4.GetAssetAttribute();
++        Assert.Equal(DalamudAssetPurpose.TextureFromRaw, attribute.Purpose);
++        Assert.NotNull(attribute.Data);
++        Assert.Equal(8, attribute.Data.Length);
++    }
++}
+diff --git a/Dalamud/DalamudAsset.cs b/Dalamud/DalamudAsset.cs
+index f0ef7a175..a075884f9 100644
+--- a/Dalamud/DalamudAsset.cs
++++ b/Dalamud/DalamudAsset.cs
+@@ -153,13 +153,6 @@ public enum DalamudAsset
+     [DalamudAssetPath("UIRes", "badgeAtlas.png")]
+     BadgeAtlas = 1015,
+ 
+-    /// <summary>
+-    /// <see cref="DalamudAssetPurpose.TextureFromPng"/>: Missing-font help image.
+-    /// </summary>
+-    [DalamudAsset(DalamudAssetPurpose.TextureFromPng)]
+-    [DalamudAssetPath("UIRes", "missingFont.png")]
+-    MissingFontTips = 1014,
+-
+     /// <summary>
+     /// <see cref="DalamudAssetPurpose.Font"/>: Noto Sans CJK SC Medium.
+     /// </summary>

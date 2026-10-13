@@ -45,6 +45,21 @@ internal static class ImportTests
         Check(result.Repositories == 1 && targetGlobal["ThirdRepoList"]!.AsArray().Count == 1 &&
               !targetGlobal["IsMbCollect"]!.GetValue<bool>() && targetGlobal["CustomPreference"]!.GetValue<string>() == "keep", "only selected repositories merge into existing global configuration");
         Check(service.Import(plan, false, [repo]).Repositories == 0, "repository merge is idempotent");
+        const string wrappedSource = """
+            {"ThirdRepoList":{"$type":"System.Collections.Generic.List`1[[Dalamud.Configuration.ThirdPartyRepoSettings, Dalamud]], System.Private.CoreLib","$values":[{"Url":"https://example.test/wrapped.json","IsEnabled":true}]}}
+            """;
+        File.WriteAllText(Path.Combine(source, "dalamudConfig.json"), wrappedSource);
+        var wrappedPlan = service.Inspect(source);
+        Check(wrappedPlan.Repositories.SequenceEqual(["https://example.test/wrapped.json"]), "repository preview reads Dalamud type-wrapped collections");
+        File.WriteAllText(paths.DalamudConfigurationPath, wrappedSource);
+        result = service.Import(plan, false, [repo]);
+        var wrappedGlobal = JsonNode.Parse(File.ReadAllText(paths.DalamudConfigurationPath))!;
+        Check(result.Repositories == 1 && wrappedGlobal["ThirdRepoList"]!["$values"]!.AsArray().Count == 2 &&
+              wrappedGlobal["ThirdRepoList"]!["$type"]!.GetValue<string>().Contains("ThirdPartyRepoSettings"), "repository import preserves Dalamud collection metadata and existing entries");
+        Check(service.Import(plan, false, [repo]).Repositories == 0, "wrapped repository merge is idempotent");
+        File.WriteAllText(paths.DalamudConfigurationPath, "{\"ThirdRepoList\":{\"$values\":false}}");
+        Expect(() => service.Import(plan, false, [repo]), "malformed repository metadata is rejected before committing data");
+        File.WriteAllText(paths.DalamudConfigurationPath, wrappedGlobal.ToJsonString());
         Expect(() => service.Import(plan, false, ["https://unselected.test/repo.json"]), "unpreviewed repository selection is rejected");
         Expect(() => service.Inspect(paths.HomeDirectory), "shared or overlapping source and target directories are rejected");
 

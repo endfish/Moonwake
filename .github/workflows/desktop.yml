@@ -17,4 +17,5 @@ jobs:
         run: |
           dotnet run --project tests/Moonwake.Tests -c Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-brand-assets.ps1
           ./scripts/build-shell.ps1
