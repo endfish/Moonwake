@@ -1,5 +1,6 @@
 using Moonwake.Configuration;
 using Moonwake.Infrastructure;
+using Moonwake.Models;
 using Moonwake.Services;
 using Moonwake.Windows;
 
@@ -16,7 +17,16 @@ internal static class StandaloneApplication
             paths.EnsureDirectories();
             logger = new StandaloneLogger(paths);
             logger.Info($"数据目录：{paths.HomeDirectory}");
-            var configuration = new ConfigurationStore(paths).LoadOrCreate();
+            StandaloneConfiguration configuration;
+            if (DistributionBootstrap.IsBundled)
+            {
+                using var preparation = new PreparationForm(paths);
+                Application.Run(preparation);
+                if (preparation.Failure is not null) throw preparation.Failure;
+                configuration = preparation.Configuration!;
+            }
+            else configuration = new ConfigurationStore(paths).LoadOrCreate();
+            CoreProfileInitializer.EnsureCreated(paths);
             var validator = new PayloadValidator(paths);
             Application.Run(new LauncherForm(configuration, new GameProcessService(), new InjectionService(paths, validator, logger), logger, paths));
             return 0;
@@ -32,23 +42,32 @@ internal static class StandaloneApplication
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args[0] is "help" or "--help" or "-h")
+        {
+            Console.WriteLine("Moonwake\n  prepare\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");
+            return 0;
+        }
         var paths = StandalonePaths.Create();
         paths.EnsureDirectories();
         using var logger = new StandaloneLogger(paths);
         try
         {
             if (args.Length == 2 && args[0] == "--render-preview") return RenderPreview(paths, logger, args[1]);
-            var configuration = new ConfigurationStore(paths).LoadOrCreate();
+            var configuration = DistributionBootstrap.Prepare(paths);
+            CoreProfileInitializer.EnsureCreated(paths);
             var validator = new PayloadValidator(paths);
             switch (args[0].ToLowerInvariant())
             {
                 case "init":
+                case "prepare":
                     paths.EnsureConfiguredDirectories(configuration);
                     logger.Info($"Moonwake 数据目录：{paths.HomeDirectory}");
                     return 0;
                 case "status":
                     var validation = validator.Validate(configuration);
                     logger.Info($"数据目录：{paths.HomeDirectory}");
+                    logger.Info($"插件目录：{paths.InstalledPluginsDirectory}");
+                    logger.Info($"核心配置：{paths.DalamudConfigurationPath}");
                     foreach (var error in validation.Errors) logger.Warn(error);
                     foreach (var process in new GameProcessService().Discover())
                         logger.Info($"PID={process.ProcessId} Version={process.GameVersion ?? "未知"} Core={process.DalamudState}");
@@ -57,7 +76,7 @@ internal static class StandaloneApplication
                 case "inject":
                     return await InjectAsync(args, paths, configuration, validator, logger);
                 case "help": case "--help": case "-h":
-                    Console.WriteLine("Moonwake\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");
+                    Console.WriteLine("Moonwake\n  prepare\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");
                     return 0;
                 default:
                     logger.Error("未知命令。使用 Moonwake help 查看可用命令。");

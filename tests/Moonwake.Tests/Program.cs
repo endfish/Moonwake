@@ -7,13 +7,10 @@ using Moonwake.Models;
 using Moonwake.Services;
 
 if (args.Contains("--child")) { await Task.Delay(700); return 0; }
-var previousHome = Environment.GetEnvironmentVariable("MOONWAKE_HOME");
 var testRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N")));
-Environment.SetEnvironmentVariable("MOONWAKE_HOME", testRoot);
 var passed = 0;
-try
 {
-    var paths = StandalonePaths.Create();
+    var paths = StandalonePaths.ForRoot(testRoot);
     paths.EnsureDirectories();
     using var logger = new StandaloneLogger(paths);
     var config = new ConfigurationStore(paths).LoadOrCreate();
@@ -65,14 +62,14 @@ try
     files["../outside.dll"] = new string('0', 64);
     WriteManifest();
     ExpectFailure(() => PayloadIntegrity.Verify(payload), "manifest path traversal is rejected");
-    passed += ImportTests.Run(paths);
     passed += StartupTests.Run(testRoot);
+    passed += DistributionTests.Run(testRoot);
+    passed += CoreProfileTests.Run(testRoot);
     Console.WriteLine($"PASS: {passed} checks");
     return 0;
 
     void WriteManifest() => File.WriteAllText(manifest, JsonSerializer.Serialize(new { product="Moonwake", schemaVersion=1, files }));
 }
-finally { Environment.SetEnvironmentVariable("MOONWAKE_HOME", previousHome); }
 
 void Assert(bool condition, string description)
 {

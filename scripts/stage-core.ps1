@@ -1,9 +1,15 @@
 [CmdletBinding()]
-param([string]$SourceRoot, [Parameter(Mandatory)][string]$Destination)
+param([string]$SourceRoot, [Parameter(Mandatory)][string]$Destination, [string]$VCRuntimeDirectory)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (!$SourceRoot) { $SourceRoot = Join-Path $repoRoot '.build/source/Dalamud' }
 $source = Join-Path $SourceRoot 'bin/Release'
+if (!$VCRuntimeDirectory -and $env:VCToolsRedistDir) { $VCRuntimeDirectory = Join-Path $env:VCToolsRedistDir 'x64/Microsoft.VC143.CRT' }
+if (!$VCRuntimeDirectory) { throw 'Specify -VCRuntimeDirectory pointing to the Visual Studio x64 Microsoft.VC143.CRT redistributable folder.' }
+$crtFiles = @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll')
+foreach ($name in $crtFiles) {
+    if (!(Test-Path -LiteralPath (Join-Path $VCRuntimeDirectory $name))) { throw 'Specify -VCRuntimeDirectory pointing to the Visual Studio x64 Microsoft.VC143.CRT redistributable folder.' }
+}
 $markerPath = Join-Path (Split-Path -Parent $SourceRoot) 'moonwake-source.json'
 $sourceManifest = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
 $inputFiles = @((Join-Path $repoRoot 'upstream.lock.json'), (Join-Path $repoRoot 'src/Moonwake/Resources/app-icon.ico')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
@@ -17,6 +23,7 @@ $Destination = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $Destination) { throw 'Destination already exists. Choose a new empty destination.' }
 New-Item -ItemType Directory -Path $Destination | Out-Null
 Get-ChildItem -LiteralPath $source -File | Where-Object { $_.Extension -in '.dll','.exe','.json' -or $_.Name -eq 'licenses.txt' } | Copy-Item -Destination $Destination
+foreach ($name in $crtFiles) { Copy-Item -LiteralPath (Join-Path $VCRuntimeDirectory $name) -Destination $Destination }
 $native = Join-Path $source 'runtimes/win-x64/native'
 if (Test-Path -LiteralPath $native) {
     $nativeDestination = Join-Path $Destination 'runtimes/win-x64/native'

@@ -1,0 +1,27 @@
+diff --git a/Dalamud.Injector/Program.cs b/Dalamud.Injector/Program.cs
+index 6fd555f..251e027 100644
+--- a/Dalamud.Injector/Program.cs
++++ b/Dalamud.Injector/Program.cs
+@@ -679,6 +679,22 @@ namespace Dalamud.Injector
+ 
+             using var injector = new Injector(process, false);
+ 
++            // The distribution carries the native CRT so a separate installer is not required.
++            // LoadLibraryW does not search the payload directory for dependencies automatically.
++            var loadedModules = process.Modules.Cast<ProcessModule>()
++                .Select(module => module.ModuleName).ToHashSet(StringComparer.OrdinalIgnoreCase);
++            foreach (var runtimeName in new[] { "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll" })
++            {
++                if (loadedModules.Contains(runtimeName))
++                    continue;
++
++                var runtimePath = Path.Combine(Path.GetDirectoryName(bootPath)!, runtimeName);
++                if (!File.Exists(runtimePath))
++                    throw new FileNotFoundException("Moonwake native runtime is missing.", runtimePath);
++
++                injector.LoadLibrary(runtimePath, out _);
++            }
++
+             injector.LoadLibrary(bootPath, out var bootModule);
+ 
+             // ======================================================

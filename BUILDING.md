@@ -18,14 +18,14 @@ Install Visual Studio 2022 C++ Build Tools with MSVC v143 and a Windows SDK, plu
 ```powershell
 ./scripts/prepare-core.ps1
 ./scripts/build-core.ps1 -CMakePath cmake
-./scripts/stage-core.ps1 -Destination artifacts/test-home/payloads/current
+./scripts/stage-core.ps1 -Destination artifacts/test-home/payloads/current -VCRuntimeDirectory <VS-Redist-x64-Microsoft.VC143.CRT-directory>
 ```
 
 The source recipe uses exact international commits in `upstream.lock.json`, then applies the numbered patches in order and copies the Moonwake application icon into the injector, boot and crash-handler resources. `0001` carries regional adaptation; the remaining patches provide the independent host, services and Moonwake policy. Submodules retain their pinned upstream revisions. Cloned source trees disable pushing and exclude local collaboration instructions.
 
 Optional `-DalamudCache` and `-ClientStructsCache` inputs reuse local Git objects without copying working-tree modifications. They are only build caches. A modified recipe requires a fresh `-OutputRoot`; the script will never reset an existing source directory. Pass its `Dalamud` subdirectory as `-SourceRoot` to the build and staging scripts.
 
-Staging checks the compiled application icons and writes SHA-256 hashes for all payload files to `moonwake-build.json`. Injection checks these hashes before starting the injector. This detects damaged local payloads; it is not a signed release or update trust system.
+Staging checks the compiled application icons, includes the three native CRT dependencies from the Visual Studio x64 redistributable directory, and writes SHA-256 hashes for all payload files to `moonwake-build.json`. The injector loads missing native CRT modules from this payload before loading the core. Injection checks the payload hashes before starting the injector. This detects damaged local payloads; it is not a signed release or update trust system.
 
 ## Isolated test resources
 
@@ -33,9 +33,6 @@ Install the same stable .NET 10 patch release for both the x64 .NET Runtime and 
 
 ```powershell
 ./scripts/prepare-resources.ps1 -HomeDirectory artifacts/test-home -RuntimeVersion <installed-10.0-version>
-$env:MOONWAKE_HOME = Join-Path $PWD 'artifacts/test-home'
-./artifacts/shell/Moonwake.exe init | Out-Host
-./artifacts/shell/Moonwake.exe status | Out-Host
 ```
 
 The maintenance script fetches assets at the international commit pinned in `resources.lock.json` and the Simplified Chinese font directly from Noto. It omits the upstream blacklist and game debug symbols, preserves resource licenses, and copies only the selected runtime components from the local Microsoft installation. It does not copy any launcher settings, plugin repositories or plugins. The desktop app itself has no automatic download or login flow.
@@ -48,9 +45,9 @@ Run `scripts/check-localization.ps1 -SourceRoot <prepared-Dalamud-directory> -As
 
 The host is a Windows GUI executable with a `requireAdministrator` manifest. Double-clicking requests elevation without creating a console window; the Windows prompt must be handled by the user. Run EXE CLI calls from an elevated shell and pipe them to `Out-Host`, or redirect output from an elevated parent process. `scripts/check-shell.ps1` verifies the compiled GUI subsystem and administrator manifest, then tests CLI output through the managed assembly without requesting interactive elevation on a build agent.
 
-The default data location is `%APPDATA%/Moonwake`. To bind a prepared profile to a desktop EXE, put a `moonwake.profile.json` file beside it with a `homeDirectory` string. Relative directories are resolved against the EXE directory, so elevation and a different working directory do not switch profiles. For example, `{"homeDirectory":"../profile"}` uses a sibling profile folder. `MOONWAKE_HOME` takes priority over this file. The selector, test resources and payloads stay out of Git. Resource preparation refuses existing destination directories; use a new test home for another bundle.
+The data root is always `%APPDATA%/XIVLauncherCN`; a first launch creates it if missing. Installed plugins and plugin configuration use the shared `installedPlugins` and `pluginConfigs` directories. Core preferences use `moonwake/config.json`; UI layout and the configuration backup database live beside that file. Plugin configuration paths are resolved from the installed-plugin directory, independently of the core configuration path. Logs and temporary files use the Moonwake subdirectory. Core/runtime/assets stay in versioned component folders within the shared root, without replacing the CN launcher's addon core.
 
-The desktop import dialog copies API 15 plugin files and optional per-plugin configuration from an existing profile. Existing target plugins and configuration are preserved, copied plugins receive new disabled identities, and repository URLs require individual selection. The optional development-plugin import keeps existing DLL build paths and reload preferences, copies plugin configuration, creates independent identities and disables startup loading. Only currently configured, valid API 15 development entries are considered. Installed-plugin and configuration directories remain isolated; the source core and unrelated global preferences are not imported. API matching is only an initial filter, not proof of game compatibility. File staging and rollback protect against partial copies; staging files and configuration backups remain under `imports/`.
+On the first initialization, `CoreProfileInitializer` copies only the repository list, development registrations and plugin loading/profile preferences into a new Moonwake configuration. Development DLL paths and identities remain unchanged; binaries are not copied. Later starts preserve Moonwake settings and do not automatically resync repositories. The repository settings page offers an explicit additive CN sync, preserving existing addresses and enabled states. The CN configuration is never used as Moonwake's save target. There is no profile selector or MOONWAKE_HOME override.
 
 Opening the plugin manager uses its current in-memory repository snapshot. Startup, configured automatic updates, repository changes and the explicit refresh button can refresh metadata. Background refresh retains the previous list until a successful replacement and does not show the initial loading overlay again. A failed refresh retains the last successful list and exposes the repository error.
 
@@ -74,4 +71,12 @@ Before a public binary release, verify startup, Chinese fonts and text input, UI
 
 ## Distribution status
 
-The current adaptation targets CN client `2026.10.06.0000.0000` for local use. There is no published binary release yet. A future release can package the EXE, independently built core, runtime, assets and license notices after broader game validation and a separate packaging review. The AGPL-covered core must retain its corresponding source and notices.
+The current adaptation targets CN client `2026.10.06.0000.0000` for local beta use. There is no published binary release yet. Build a complete installer-free package from clean, prepared components:
+
+```powershell
+./scripts/build-distribution.ps1 -PayloadDirectory <staged-payload> -AssetDirectory <prepared-assets> -RuntimeDirectory <prepared-runtime> -OutputDirectory artifacts/releases/Moonwake-win-x64
+```
+
+The script embeds only these runtime components and their SHA-256 manifest in a self-contained EXE, then creates a ZIP containing the EXE and license notices. Never use a personal profile as one of these component directories. The package excludes plugin repositories, installed/development plugins and personal configuration. The data home is `%APPDATA%/XIVLauncherCN`; a fresh home is created automatically. `Moonwake.exe prepare` performs the same initialization without injecting a game.
+
+Initialization verifies bundled resources, stages missing components, and only switches component paths after verification succeeds. Damaged components receive a new directory; old components and all personal data are preserved. Existing user preferences and normal plugin loading remain intact. There is no automatic updater yet: replace the tool with a newer complete package while retaining the user data directory. Publish the corresponding AGPL source and notices alongside any future public core distribution.

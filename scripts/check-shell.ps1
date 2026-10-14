@@ -34,7 +34,6 @@ $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.RedirectStandardOutput = $true
 $start.RedirectStandardError = $true
-$start.Environment['MOONWAKE_HOME'] = Join-Path $repoRoot ('artifacts/shell-check/' + [Guid]::NewGuid().ToString('N'))
 $process = [Diagnostics.Process]::Start($start)
 try {
     $outputTask = $process.StandardOutput.ReadToEndAsync()

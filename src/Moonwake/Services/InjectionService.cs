@@ -49,7 +49,7 @@ internal sealed class InjectionService(
 
         var startInfo = this.CreateStartInfo(target, configuration, payload.Layout, researchMode, noPlugins);
 
-        logger.Info($"调用 Injector 注入 PID {target.ProcessId}。Payload={payload.Layout.PayloadDirectory}");
+        logger.Info($"调用 Injector 注入 PID {target.ProcessId}。Payload={payload.Layout.PayloadDirectory}; Configuration={paths.DalamudConfigurationPath}; Plugins={paths.InstalledPluginsDirectory}");
 
         using var injector = new Process { StartInfo = startInfo };
         if (!injector.Start())

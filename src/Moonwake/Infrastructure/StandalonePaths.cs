@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Moonwake.Configuration;
 
 namespace Moonwake.Infrastructure;
@@ -8,17 +7,22 @@ internal sealed class StandalonePaths
     private StandalonePaths(string homeDirectory)
     {
         this.HomeDirectory = homeDirectory;
+        this.CoreConfigurationDirectory = Path.Combine(homeDirectory, "moonwake");
         this.ConfigurationDirectory = Path.Combine(homeDirectory, "config");
         this.InstalledPluginsDirectory = Path.Combine(homeDirectory, "installedPlugins");
         this.PluginConfigurationsDirectory = Path.Combine(homeDirectory, "pluginConfigs");
-        this.LogDirectory = Path.Combine(homeDirectory, "logs");
-        this.ImportDirectory = Path.Combine(homeDirectory, "imports");
-        this.TempDirectory = Path.Combine(homeDirectory, "temp");
+        this.LogDirectory = Path.Combine(this.CoreConfigurationDirectory, "logs");
+        this.TempDirectory = Path.Combine(this.CoreConfigurationDirectory, "temp");
         this.StandaloneConfigurationPath = Path.Combine(this.ConfigurationDirectory, "moonwake.json");
-        this.DalamudConfigurationPath = Path.Combine(homeDirectory, "dalamudConfig.json");
+        this.DalamudConfigurationPath = Path.Combine(this.CoreConfigurationDirectory, "config.json");
+        this.CnConfigurationPath = Path.Combine(homeDirectory, "dalamudConfig.json");
     }
 
     public string HomeDirectory { get; }
+
+    public string CoreConfigurationDirectory { get; }
+
+    public string CnConfigurationPath { get; }
 
     public string ConfigurationDirectory { get; }
 
@@ -28,8 +32,6 @@ internal sealed class StandalonePaths
 
     public string LogDirectory { get; }
 
-    public string ImportDirectory { get; }
-
     public string TempDirectory { get; }
 
     public string StandaloneConfigurationPath { get; }
@@ -38,36 +40,19 @@ internal sealed class StandalonePaths
 
     public static StandalonePaths Create()
     {
-        return new StandalonePaths(ResolveHome(AppContext.BaseDirectory,
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            Environment.GetEnvironmentVariable("MOONWAKE_HOME")));
+        return ForRoot(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "XIVLauncherCN"));
     }
 
-    internal static string ResolveHome(string executableDirectory, string applicationDataDirectory, string? configuredHome)
-    {
-        if (!string.IsNullOrWhiteSpace(configuredHome))
-            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredHome.Trim()));
-
-        var profilePath = Path.Combine(executableDirectory, "moonwake.profile.json");
-        if (!File.Exists(profilePath)) return Path.Combine(applicationDataDirectory, "Moonwake");
-        try
-        {
-            using var profile = JsonDocument.Parse(File.ReadAllText(profilePath));
-            if (profile.RootElement.ValueKind != JsonValueKind.Object || !profile.RootElement.TryGetProperty("homeDirectory", out var home) || home.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(home.GetString()))
-                throw new InvalidDataException("moonwake.profile.json 必须包含 homeDirectory 数据目录。");
-            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(home.GetString()!.Trim()), executableDirectory);
-        }
-        catch (JsonException ex) { throw new InvalidDataException("moonwake.profile.json 格式无效，请检查启动配置。", ex); }
-    }
+    internal static StandalonePaths ForRoot(string homeDirectory) => new(Path.GetFullPath(homeDirectory));
 
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(this.HomeDirectory);
+        Directory.CreateDirectory(this.CoreConfigurationDirectory);
         Directory.CreateDirectory(this.ConfigurationDirectory);
         Directory.CreateDirectory(this.InstalledPluginsDirectory);
         Directory.CreateDirectory(this.PluginConfigurationsDirectory);
         Directory.CreateDirectory(this.LogDirectory);
-        Directory.CreateDirectory(this.ImportDirectory);
         Directory.CreateDirectory(this.TempDirectory);
     }
 

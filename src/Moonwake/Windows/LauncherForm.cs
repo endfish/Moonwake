@@ -11,12 +11,10 @@ internal sealed class LauncherForm : Form
 {
     private static readonly Color Foreground = Color.FromArgb(232, 238, 244);
     private static readonly Color Muted = Color.FromArgb(139, 158, 172);
-    private static readonly Color Accent = Color.FromArgb(158, 218, 221);
     private readonly StandaloneConfiguration configuration;
     private readonly GameProcessService processService;
     private readonly InjectionService injectionService;
     private readonly StandaloneLogger logger;
-    private readonly StandalonePaths paths;
     private readonly PayloadValidator validator;
     private readonly bool preview;
     private readonly ComboBox processes = new ProcessComboBox();
@@ -36,7 +34,6 @@ internal sealed class LauncherForm : Form
         this.processService = processService;
         this.injectionService = injectionService;
         this.logger = logger;
-        this.paths = paths;
         this.validator = new PayloadValidator(paths);
         this.preview = preview;
         this.Text = "Moonwake";
@@ -127,20 +124,6 @@ internal sealed class LauncherForm : Form
         this.status.AutoEllipsis = true;
         this.Controls.Add(this.status);
         this.tooltips.SetToolTip(this.inject, "成功后隐藏窗口；游戏关闭时自动退出，无托盘图标。");
-        var import = new LinkLabel
-        {
-            Text = "导入插件", Bounds = new Rectangle(140, 466, 120, 25),
-            TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
-            LinkColor = Color.FromArgb(226, 235, 242), ActiveLinkColor = Accent,
-            LinkBehavior = LinkBehavior.HoverUnderline,
-        };
-        import.LinkClicked += (_, _) =>
-        {
-            if (this.preview || this.busy || this.attached) return;
-            using var dialog = new ImportForm(this.paths);
-            dialog.ShowDialog(this);
-        };
-        this.Controls.Add(import);
     }
 
     private void SetStatus(string text)

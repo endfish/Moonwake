@@ -1,0 +1,297 @@
+diff --git a/Dalamud.Injector/Program.cs b/Dalamud.Injector/Program.cs
+index 251e027..2add875 100644
+--- a/Dalamud.Injector/Program.cs
++++ b/Dalamud.Injector/Program.cs
+@@ -71,6 +71,12 @@ namespace Dalamud.Injector
+                 }
+ 
+                 startInfo = ExtractAndInitializeStartInfoFromArguments(startInfo, args);
++                if (args.Remove("--print-start-info"))
++                {
++                    Console.WriteLine(JsonConvert.SerializeObject(startInfo));
++                    return 0;
++                }
++
+                 // Remove already handled arguments
+                 args.Remove("--debug-directx");
+                 args.Remove("--console");
+@@ -366,10 +372,10 @@ namespace Dalamud.Injector
+             }
+ 
+             var appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+-            var standaloneDir = Path.Combine(appDataDir, "DalamudStandaloneCN");
++            var standaloneDir = Path.Combine(appDataDir, "XIVLauncherCN");
+ 
+             workingDirectory ??= Directory.GetCurrentDirectory();
+-            configurationPath ??= Path.Combine(standaloneDir, "dalamudConfig.json");
++            configurationPath ??= Path.Combine(standaloneDir, "moonwake", "config.json");
+             pluginDirectory ??= Path.Combine(standaloneDir, "installedPlugins");
+             assetDirectory ??= Path.Combine(standaloneDir, "assets", "current");
+             runtimeDirectory ??= Path.Combine(standaloneDir, "runtime");
+diff --git a/Dalamud/EntryPoint.cs b/Dalamud/EntryPoint.cs
+index 5f91587..0fe5326 100644
+--- a/Dalamud/EntryPoint.cs
++++ b/Dalamud/EntryPoint.cs
+@@ -147,6 +147,10 @@ public sealed class EntryPoint
+         var configuration = DalamudConfiguration.Load(info.ConfigurationPath!, fs)
+                                                 .GetAwaiter().GetResult();
+ 
++        Log.Information("Moonwake profile: Configuration={Configuration}; Plugins={Plugins}; PluginConfigurations={PluginConfigurations}; Repositories={Repositories}; DevelopmentEntries={DevelopmentEntries}",
++                        info.ConfigurationPath, info.PluginDirectory, MoonwakeProfilePaths.GetPluginConfigurationDirectory(info.PluginDirectory!),
++                        configuration.ThirdRepoList.Count, configuration.DevPluginLoadLocations.Count);
++
+         // Set the appropriate logging level from the configuration
+         if (!configuration.LogSynchronously)
+             InitLogging(info.LogPath!, info.BootShowConsole, configuration.LogSynchronously, info.LogName);
+diff --git a/Dalamud/Plugin/Internal/PluginManager.cs b/Dalamud/Plugin/Internal/PluginManager.cs
+index e7581b9..75ab13c 100644
+--- a/Dalamud/Plugin/Internal/PluginManager.cs
++++ b/Dalamud/Plugin/Internal/PluginManager.cs
+@@ -103,7 +103,7 @@ internal class PluginManager : IInternalDisposableService
+             this.configuration.QueueSave();
+         }
+ 
+-        this.PluginConfigs = new PluginConfigurations(Path.Combine(Path.GetDirectoryName(this.dalamud.StartInfo.ConfigurationPath) ?? string.Empty, "pluginConfigs"));
++        this.PluginConfigs = new PluginConfigurations(MoonwakeProfilePaths.GetPluginConfigurationDirectory(this.pluginDirectory.FullName));
+ 
+         this.openInstallerWindowPluginChangelogsLink =
+             Service<ChatGui>.GetAsync().ContinueWith(
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+index 9f27318..a60d9b6 100644
+--- a/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/ThirdRepoSettingsEntry.cs
+@@ -26,6 +26,7 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+     private bool thirdRepoListChanged;
+     private string thirdRepoTempUrl = string.Empty;
+     private string thirdRepoAddError = string.Empty;
++    private string syncMessage = string.Empty;
+     private DateTime timeSinceOpened;
+ 
+     public override void OnOpen()
+@@ -44,6 +45,7 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+         this.thirdRepoList =
+             [.. Service<DalamudConfiguration>.Get().ThirdRepoList.Where(repo => !repo.Url.IsNullOrEmpty()).Select(x => x.Clone())];
+         this.thirdRepoListChanged = false;
++        this.syncMessage = string.Empty;
+     }
+ 
+     public override void Save()
+@@ -130,6 +132,32 @@ internal class ThirdRepoSettingsEntry : SettingsEntry
+ 
+         ImGuiHelpers.ScaledDummy(5);
+ 
++        if (ImGui.Button(Loc.Localize("MoonwakeSyncCnRepositories", "Sync CN custom repositories")))
++        {
++            try
++            {
++                var source = MoonwakeProfilePaths.GetCnConfigurationPath(Service<Dalamud>.Get().StartInfo.PluginDirectory!);
++                var result = CnRepositorySync.Merge(this.thirdRepoList, source);
++                this.thirdRepoListChanged |= result.Added > 0;
++                this.Save();
++                config.QueueSave();
++                this.syncMessage = string.Format(
++                    Loc.Localize("MoonwakeSyncCnRepositoriesDone", "Merged {0} new repositories; skipped {1} invalid entries. Existing repository preferences were preserved."),
++                    result.Added, result.Invalid);
++            }
++            catch (Exception ex)
++            {
++                Serilog.Log.Warning(ex, "Could not merge CN custom repositories into Moonwake");
++                this.syncMessage = Loc.Localize("MoonwakeSyncCnRepositoriesFailed", "Could not read the CN custom repository list. Existing repositories were preserved.");
++            }
++        }
++
++        ImGui.TextColoredWrapped(ImGuiColors.DalamudGrey, Loc.Localize("MoonwakeSyncCnRepositoriesHint", "Merge only: keep existing addresses and enabled states. Changes here are saved only to Moonwake."));
++        if (!string.IsNullOrEmpty(this.syncMessage))
++            ImGui.TextWrapped(this.syncMessage);
++
++        ImGuiHelpers.ScaledDummy(5);
++
+         ImGui.Columns(4);
+         ImGui.SetColumnWidth(0, 18 + (5 * ImGuiHelpers.GlobalScale));
+         ImGui.SetColumnWidth(1, ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X - (18 + 16 + 14) - ((5 + 45 + 26) * ImGuiHelpers.GlobalScale));
+diff --git a/Dalamud/Configuration/Internal/MoonwakeProfilePaths.cs b/Dalamud/Configuration/Internal/MoonwakeProfilePaths.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Configuration/Internal/MoonwakeProfilePaths.cs
+@@ -0,0 +1,25 @@
++using System.IO;
++
++namespace Dalamud.Configuration.Internal;
++
++/// <summary>
++/// Locates shared plugin data independently of the Moonwake core configuration.
++/// </summary>
++internal static class MoonwakeProfilePaths
++{
++    /// <summary>Gets the shared plugin configuration directory.</summary>
++    /// <param name="pluginDirectory">The installed plugin directory passed by the host.</param>
++    /// <returns>The existing plugin configuration directory.</returns>
++    public static string GetPluginConfigurationDirectory(string pluginDirectory)
++        => Path.Combine(GetSharedDirectory(pluginDirectory), "pluginConfigs");
++
++    /// <summary>Gets the CN configuration used only as a repository source.</summary>
++    /// <param name="pluginDirectory">The installed plugin directory passed by the host.</param>
++    /// <returns>The CN configuration path.</returns>
++    public static string GetCnConfigurationPath(string pluginDirectory)
++        => Path.Combine(GetSharedDirectory(pluginDirectory), "dalamudConfig.json");
++
++    private static string GetSharedDirectory(string pluginDirectory)
++        => Directory.GetParent(Path.TrimEndingDirectorySeparator(Path.GetFullPath(pluginDirectory)))?.FullName
++           ?? throw new InvalidDataException("The plugin directory must have a parent directory.");
++}
+diff --git a/Dalamud/Configuration/Internal/CnRepositorySync.cs b/Dalamud/Configuration/Internal/CnRepositorySync.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Configuration/Internal/CnRepositorySync.cs
+@@ -0,0 +1,58 @@
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++
++using Newtonsoft.Json.Linq;
++
++namespace Dalamud.Configuration.Internal;
++
++/// <summary>
++/// Merges repository addresses from the CN configuration without changing existing preferences.
++/// </summary>
++internal static class CnRepositorySync
++{
++    /// <summary>Reads a local CN configuration and adds new repository addresses.</summary>
++    /// <param name="destination">The editable Moonwake repository list.</param>
++    /// <param name="sourcePath">The read-only CN configuration path.</param>
++    /// <returns>The number of added and invalid entries.</returns>
++    public static (int Added, int Invalid) Merge(List<ThirdPartyRepoSettings> destination, string sourcePath)
++    {
++        var root = JObject.Parse(File.ReadAllText(sourcePath));
++        var token = root["ThirdRepoList"];
++        if (token is null || token.Type == JTokenType.Null)
++            return (0, 0);
++
++        var source = token as JArray ?? token["$values"] as JArray
++            ?? throw new InvalidDataException("The CN repository list is not an array.");
++        var known = destination.Select(x => Normalize(x.Url)).Where(x => x != null).ToHashSet(StringComparer.Ordinal);
++        var additions = new List<ThirdPartyRepoSettings>();
++        var invalid = 0;
++        foreach (var entry in source)
++        {
++            if (entry is not JObject item || item["Url"]?.Type != JTokenType.String ||
++                (item["IsEnabled"] is { Type: not JTokenType.Boolean and not JTokenType.Null }))
++            {
++                invalid++;
++                continue;
++            }
++
++            var url = ((string?)item["Url"])?.Trim();
++            var normalized = Normalize(url);
++            if (normalized is null)
++            {
++                invalid++;
++                continue;
++            }
++
++            if (known.Add(normalized))
++                additions.Add(new ThirdPartyRepoSettings { Url = url!, IsEnabled = (bool?)item["IsEnabled"] ?? true });
++        }
++
++        destination.AddRange(additions);
++        return (additions.Count, invalid);
++    }
++
++    private static string? Normalize(string? address)
++        => Uri.TryCreate(address?.Trim(), UriKind.Absolute, out var uri) &&
++           uri.Scheme is "http" or "https" ? uri.AbsoluteUri : null;
++}
+diff --git a/Dalamud.Test/Storage/MoonwakeProfileTests.cs b/Dalamud.Test/Storage/MoonwakeProfileTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Storage/MoonwakeProfileTests.cs
+@@ -0,0 +1,88 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++
++using Dalamud.Configuration;
++using Dalamud.Configuration.Internal;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
++using Xunit;
++
++namespace Dalamud.Test.Storage;
++
++public class MoonwakeProfileTests
++{
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void RepositoryMergePreservesExistingChoicesAndIsRepeatable(bool wrapped)
++    {
++        var path = Path.GetTempFileName();
++        try
++        {
++            var entries = JArray.Parse("[{\"Url\":\"https://EXAMPLE.test/repo\",\"IsEnabled\":true},{\"Url\":\" https://example.test/new \",\"IsEnabled\":false},{\"Url\":\"https://example.test/new\",\"IsEnabled\":true},{\"Url\":\"file:///invalid\"}]");
++            var source = new JObject { ["ThirdRepoList"] = wrapped ? new JObject { ["$values"] = entries } : entries };
++            File.WriteAllText(path, source.ToString());
++            var original = File.ReadAllText(path);
++            var repos = new List<ThirdPartyRepoSettings>
++            {
++                new() { Url = "https://example.test/repo", IsEnabled = false },
++                new() { Url = "https://personal.test/repo", IsEnabled = true },
++            };
++            Assert.Equal((1, 1), CnRepositorySync.Merge(repos, path));
++            Assert.Equal(3, repos.Count);
++            Assert.False(repos[0].IsEnabled);
++            Assert.True(repos[1].IsEnabled);
++            Assert.False(repos[2].IsEnabled);
++            Assert.Equal((0, 1), CnRepositorySync.Merge(repos, path));
++            Assert.Equal(original, File.ReadAllText(path));
++            File.WriteAllText(path, "{broken");
++            Assert.ThrowsAny<JsonException>(() => CnRepositorySync.Merge(repos, path));
++            Assert.Equal(3, repos.Count);
++        }
++        finally { File.Delete(path); }
++    }
++
++    [Fact]
++    public void SharedPluginDataDoesNotFollowCoreConfigurationDirectory()
++    {
++        var root = Path.Combine(Path.GetTempPath(), "moonwake-layout");
++        Assert.Equal(Path.Combine(root, "pluginConfigs"), MoonwakeProfilePaths.GetPluginConfigurationDirectory(Path.Combine(root, "installedPlugins") + Path.DirectorySeparatorChar));
++        Assert.Equal(Path.Combine(root, "dalamudConfig.json"), MoonwakeProfilePaths.GetCnConfigurationPath(Path.Combine(root, "installedPlugins")));
++    }
++
++    [Fact]
++    public void RepeatedCoreConfigurationSavesDoNotDuplicateCalculatedFields()
++    {
++        var settings = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.All };
++        var json = JsonConvert.SerializeObject(new DalamudConfiguration(), settings);
++        for (var i = 0; i < 3; i++)
++        {
++            var config = JsonConvert.DeserializeObject<DalamudConfiguration>(json, settings)!;
++            json = JsonConvert.SerializeObject(config, settings);
++            using var document = System.Text.Json.JsonDocument.Parse(json);
++            Assert.All(document.RootElement.EnumerateObject().GroupBy(x => x.Name), fields => Assert.Single(fields));
++        }
++    }
++
++    [Fact]
++    public void InitializedShellProfileLoadsWithPluginStateAndMoonwakeDefaults()
++    {
++        var fixture = Environment.GetEnvironmentVariable("MOONWAKE_INITIALIZED_PROFILE_OUTPUT");
++        if (string.IsNullOrEmpty(fixture)) return;
++        var text = File.ReadAllText(fixture);
++        var source = JObject.Parse(text);
++        var settings = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.All };
++        var config = JsonConvert.DeserializeObject<DalamudConfiguration>(text, settings)!;
++        Assert.Equal("Moonwake Blue", config.ChosenStyle);
++        Assert.Equal("zh", config.LanguageOverride);
++        Assert.False(config.PluginSafeMode);
++        Assert.Equal(source["ThirdRepoList"]!["$values"]!.Count(), config.ThirdRepoList.Count);
++        Assert.Equal(source["DevPluginLoadLocations"]!["$values"]!.Count(), config.DevPluginLoadLocations.Count);
++        var saved = JObject.Parse(JsonConvert.SerializeObject(config, settings));
++        foreach (var field in new[] { "ThirdRepoList", "DevPluginLoadLocations", "DevPluginSettings", "DefaultProfile", "SavedProfiles" })
++            Assert.True(JToken.DeepEquals(source[field], saved[field]), field);
++        Assert.Equal(text, File.ReadAllText(fixture));
++    }
++}

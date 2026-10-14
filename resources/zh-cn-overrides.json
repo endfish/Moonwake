@@ -1,4 +1,8 @@
 {
+  "MoonwakeSyncCnRepositories": "同步国服自定义仓库",
+  "MoonwakeSyncCnRepositoriesHint": "默认合并：只添加新地址，保留已有地址及其启用状态。仓库列表仅保存到 Moonwake。",
+  "MoonwakeSyncCnRepositoriesDone": "已保存：新增 {0} 个仓库，跳过 {1} 个无效条目。已有仓库及其启用状态保持不变。",
+  "MoonwakeSyncCnRepositoriesFailed": "无法读取国服自定义仓库列表，请检查国服配置文件。现有仓库保持不变。",
   "LoadingDialogMainInstructionLoadingDalamud": "正在初始化 Moonwake…",
   "LoadingDialogMainInstructionLoadingPlugins": "正在加载插件…",
   "LoadingDialogMainInstructionAutoUpdatePlugins": "正在更新插件…",
@@ -397,5 +401,6 @@
   "InstallerSingleUpdateFail": "插件 {0} 更新失败（{1}）。\n{2}",
   "ProfileManagerTutorialCommandsEnable": "{0} \"合集名称\" - 启用合集",
   "ProfileManagerTutorialCommandsDisable": "{0} \"合集名称\" - 禁用合集",
-  "ProfileManagerTutorialCommandsToggle": "{0} \"合集名称\" - 切换合集状态"
+  "ProfileManagerTutorialCommandsToggle": "{0} \"合集名称\" - 切换合集状态",
+  "DalamudSettingsDevPluginLocationsHint": "添加开发插件 DLL 的完整路径。直接使用原文件；重新构建后可按插件设置自动重载。"
 }
