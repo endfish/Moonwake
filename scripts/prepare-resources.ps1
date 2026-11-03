@@ -34,8 +34,8 @@ Invoke-WebRequest "$fontBase/Sans/LICENSE" -OutFile (Join-Path $assets 'LICENSE-
 & (Join-Path $PSScriptRoot 'apply-brand-assets.ps1') -AssetDirectory $assets
 foreach ($relative in $runtimePaths) {
     $destination = Join-Path $runtime $relative
-    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $DotnetRoot $relative) -Destination $destination -Recurse
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $DotnetRoot $relative) -Force | Copy-Item -Destination $destination -Recurse
 }
 foreach ($name in @('LICENSE.txt','ThirdPartyNotices.txt')) {
     if (Test-Path -LiteralPath (Join-Path $DotnetRoot $name)) { Copy-Item -LiteralPath (Join-Path $DotnetRoot $name) -Destination $runtime }

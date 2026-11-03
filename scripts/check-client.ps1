@@ -16,7 +16,7 @@ $versionFile = Join-Path (Split-Path -Parent $GameExecutable) 'ffxivgame.ver'
 $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
 $structs = Join-Path $SourceRoot 'lib/FFXIVClientStructs'
 $sourceManifest = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $SourceRoot) 'moonwake-source.json') -Raw | ConvertFrom-Json
-$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
+$inputFiles = @((Join-Path $repoRoot 'upstream.lock.json'), (Join-Path $repoRoot 'src/Moonwake/Resources/app-icon.ico')) + @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'patches') -Recurse -Filter '*.patch' | Sort-Object FullName | ForEach-Object FullName)
 $inputHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputFiles | ForEach-Object {(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash}) -join ''))))
 if ($sourceManifest.inputHash -ne $inputHash) { throw 'Source recipe changed; materialize and build the current recipe first.' }
 $hashBefore = (Get-FileHash -LiteralPath $GameExecutable -Algorithm SHA256).Hash

@@ -1,0 +1,60 @@
+diff --git a/Directory.Packages.props b/Directory.Packages.props
+--- a/Directory.Packages.props
++++ b/Directory.Packages.props
+@@ -20,6 +20,9 @@
+     <PackageVersion Include="System.Reflection.MetadataLoadContext" Version="10.0.0" />
+     <PackageVersion Include="DotNet.ReproducibleBuilds" Version="1.2.39" />
+     <PackageVersion Include="sqlite-net-pcl" Version="1.9.172" />
++    <PackageVersion Include="SQLitePCLRaw.bundle_green" Version="2.1.11" />
++    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
++    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
+ 
+     <!-- DirectX / Win32 -->
+     <PackageVersion Include="TerraFX.Interop.Windows" Version="10.0.26100.5" />
+diff --git a/Dalamud/Dalamud.csproj b/Dalamud/Dalamud.csproj
+--- a/Dalamud/Dalamud.csproj
++++ b/Dalamud/Dalamud.csproj
+@@ -77,6 +77,8 @@
+         <PackageReference Include="Serilog.Sinks.Console" />
+         <PackageReference Include="Serilog.Sinks.File" />
+         <PackageReference Include="sqlite-net-pcl" />
++        <PackageReference Include="SQLitePCLRaw.bundle_green" />
++        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+         <PackageReference Include="StyleCop.Analyzers">
+             <PrivateAssets>all</PrivateAssets>
+             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+diff --git a/Dalamud.Injector/Dalamud.Injector.csproj b/Dalamud.Injector/Dalamud.Injector.csproj
+--- a/Dalamud.Injector/Dalamud.Injector.csproj
++++ b/Dalamud.Injector/Dalamud.Injector.csproj
+@@ -57,6 +57,7 @@
+         <PackageReference Include="Newtonsoft.Json" />
+         <PackageReference Include="Microsoft.Windows.CsWin32" />
+         <PackageReference Include="PeNet" />
++        <PackageReference Include="System.Security.Cryptography.Pkcs" />
+         <PackageReference Include="Reloaded.Memory" />
+         <PackageReference Include="Reloaded.Memory.Buffers" />
+         <PackageReference Include="Serilog" />
+diff --git a/Dalamud.Test/Utility/SqliteRuntimeTests.cs b/Dalamud.Test/Utility/SqliteRuntimeTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Utility/SqliteRuntimeTests.cs
+@@ -0,0 +1,19 @@
++using System;
++using SQLite;
++using Xunit;
++
++namespace Dalamud.Test.Utility;
++
++public class SqliteRuntimeTests
++{
++    [Fact]
++    public void BundledNativeSqliteContainsSecurityFix()
++    {
++        using var connection = new SQLiteConnection(":memory:");
++        var version = Version.Parse(connection.ExecuteScalar<string>("SELECT sqlite_version()"));
++        Assert.True(version >= new Version(3, 50, 2), $"Unexpected native SQLite version: {version}");
++        connection.Execute("CREATE TABLE Settings (Name TEXT PRIMARY KEY, Value TEXT)");
++        connection.RunInTransaction(() => connection.Execute("INSERT INTO Settings VALUES (?, ?)", "profile", "中文配置"));
++        Assert.Equal("中文配置", connection.ExecuteScalar<string>("SELECT Value FROM Settings WHERE Name = ?", "profile"));
++    }
++}

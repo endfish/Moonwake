@@ -1,0 +1,4245 @@
+diff --git a/Dalamud/Configuration/Internal/DalamudConfiguration.cs b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+--- a/Dalamud/Configuration/Internal/DalamudConfiguration.cs
++++ b/Dalamud/Configuration/Internal/DalamudConfiguration.cs
+@@ -283,6 +283,11 @@
+     public bool IsGamepadNavigationEnabled { get; set; } = true;
+ 
+     /// <summary>
++    /// Gets or sets a value indicating whether gamepad navigation turns off once the last navigable window closes.
++    /// </summary>
++    public bool AutoExitGamepadNavigation { get; set; } = false;
++
++    /// <summary>
+     /// Gets or sets a value indicating whether focus management is enabled.
+     /// </summary>
+     public bool IsFocusManagementEnabled { get; set; } = true;
+diff --git a/Dalamud/Dalamud.cs b/Dalamud/Dalamud.cs
+--- a/Dalamud/Dalamud.cs
++++ b/Dalamud/Dalamud.cs
+@@ -25,7 +25,6 @@
+ #endif
+ 
+ [assembly: InternalsVisibleTo("Dalamud.Test")]
+-[assembly: InternalsVisibleTo("Dalamud.DevHelpers")]
+ 
+ namespace Dalamud;
+ 
+diff --git a/Dalamud/Dalamud.csproj b/Dalamud/Dalamud.csproj
+--- a/Dalamud/Dalamud.csproj
++++ b/Dalamud/Dalamud.csproj
+@@ -6,7 +6,7 @@
+ 
+     <PropertyGroup Label="Feature">
+         <Description>XIV Launcher addon framework</Description>
+-        <DalamudVersion>15.0.3.6</DalamudVersion>
++        <DalamudVersion>15.0.3.9</DalamudVersion>
+         <AssemblyVersion>$(DalamudVersion)</AssemblyVersion>
+         <Version>$(DalamudVersion)</Version>
+         <FileVersion>$(DalamudVersion)</FileVersion>
+@@ -216,10 +216,25 @@
+         <Exec Command="echo|set /P =&quot;$(SCMVersion)&quot; &gt; $(TempVerFile)" IgnoreExitCode="true" />
+     </Target>
+ 
+-    <Target Name="GenerateStubVersionData" BeforeTargets="WriteVersionData" Condition="'$(SCMVersion)'=='' And '$(Configuration)'!='Release'">
++    <!-- did anything change? -->
++    <Target Name="CollectLocalBuildInputs" DependsOnTargets="$(CoreCompileDependsOn);GenerateSourceLinkFile">
++        <PropertyGroup>
++            <LocalBuildTimeFile>$(IntermediateOutputPath)LocalBuildTime.txt</LocalBuildTimeFile>
++        </PropertyGroup>
++        <ItemGroup>
++            <!-- see: target "CoreCompile" in Microsoft.CSharp.Core.targets -->
++            <LocalBuildInput Include="$(MSBuildAllProjects);@(Compile);@(_CoreCompileResourceInputs);$(ApplicationIcon);$(KeyOriginatorFile);@(ReferencePathWithRefAssemblies);@(CompiledLicenseFile);@(LinkResource);@(EmbeddedDocumentation);$(Win32Resource);$(Win32Manifest);@(CustomAdditionalCompileInputs);$(ResolvedCodeAnalysisRuleSet);@(AdditionalFiles);@(EmbeddedFiles);@(Analyzer);@(EditorConfigFiles);$(SourceLink)" Exclude="$(IntermediateOutputPath)CustomAssemblyInfo.cs" />
++        </ItemGroup>
++    </Target>
++
++    <Target Name="WriteLocalBuildTimeFile" DependsOnTargets="CollectLocalBuildInputs" Inputs="@(LocalBuildInput)" Outputs="$(LocalBuildTimeFile)">
++        <WriteLinesToFile File="$(LocalBuildTimeFile)" Lines="$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))" Overwrite="true" />
++    </Target>
++
++    <Target Name="GenerateStubVersionData" BeforeTargets="WriteVersionData" DependsOnTargets="WriteLocalBuildTimeFile" Condition="'$(SCMVersion)'=='' And '$(Configuration)'!='Release'">
+         <!-- stub out version since it takes a while. -->
+         <PropertyGroup>
+-            <SCMVersion>Local build at $([System.DateTime]::Now.ToString(yyyy-MM-dd HH:mm:ss))</SCMVersion>
++            <SCMVersion>Local build at $([System.IO.File]::ReadAllText('$(LocalBuildTimeFile)').Trim())</SCMVersion>
+             <Branch>???</Branch>
+             <CommitHashClientStructs>???</CommitHashClientStructs>
+         </PropertyGroup>
+@@ -236,28 +251,15 @@
+         </ItemGroup>
+         <!-- defines the AssemblyMetadata attribute that will be written -->
+         <ItemGroup>
+-            <AssemblyAttributes Include="AssemblyMetadata" Condition="'$(SCMVersion)' != ''">
+-                <_Parameter1>SCMVersion</_Parameter1>
+-                <_Parameter2>$(SCMVersion)</_Parameter2>
+-            </AssemblyAttributes>
+-            <AssemblyAttributes Include="AssemblyMetadata" Condition="'$(CommitCount)' != ''">
+-                <_Parameter1>GitCommitCount</_Parameter1>
+-                <_Parameter2>$(CommitCount)</_Parameter2>
+-            </AssemblyAttributes>
+-            <AssemblyAttributes Include="AssemblyMetadata" Condition="'$(Branch)' != ''">
+-                <_Parameter1>GitBranch</_Parameter1>
+-                <_Parameter2>$(Branch)</_Parameter2>
+-            </AssemblyAttributes>
+-            <AssemblyAttributes Include="AssemblyMetadata" Condition="'$(CommitHashClientStructs)' != ''">
+-                <_Parameter1>GitHashClientStructs</_Parameter1>
+-                <_Parameter2>$(CommitHashClientStructs)</_Parameter2>
+-            </AssemblyAttributes>
+-            <AssemblyAttributes Include="AssemblyMetadata" Condition="'$(CommitHash)' != ''">
+-                <_Parameter1>GitHash</_Parameter1>
+-                <_Parameter2>$(CommitHash)</_Parameter2>
+-            </AssemblyAttributes>
+-        </ItemGroup>
+-        <!-- writes the attribute to the customAssemblyInfo file -->
+-        <WriteCodeFragment Language="C#" OutputFile="$(CustomAssemblyInfoFile)" AssemblyAttributes="@(AssemblyAttributes)" />
++            <VersionMetadata Include="SCMVersion" Value="$(SCMVersion)" Condition="'$(SCMVersion)' != ''" />
++            <VersionMetadata Include="GitCommitCount" Value="$(CommitCount)" Condition="'$(CommitCount)' != ''" />
++            <VersionMetadata Include="GitBranch" Value="$(Branch)" Condition="'$(Branch)' != ''" />
++            <VersionMetadata Include="GitHashClientStructs" Value="$(CommitHashClientStructs)" Condition="'$(CommitHashClientStructs)' != ''" />
++            <VersionMetadata Include="GitHash" Value="$(CommitHash)" Condition="'$(CommitHash)' != ''" />
++            <AssemblyAttributes Include="AssemblyMetadata"><_Parameter1>%(VersionMetadata.Identity)</_Parameter1><_Parameter2>%(VersionMetadata.Value)</_Parameter2></AssemblyAttributes>
++        </ItemGroup>
++        <WriteCodeFragment Language="C#" OutputFile="$(CustomAssemblyInfoFile).tmp" AssemblyAttributes="@(AssemblyAttributes)" />
++        <ReadLinesFromFile File="$(CustomAssemblyInfoFile).tmp"><Output TaskParameter="Lines" ItemName="CustomAssemblyInfoFileLines" /></ReadLinesFromFile>
++        <WriteLinesToFile File="$(CustomAssemblyInfoFile)" Lines="@(CustomAssemblyInfoFileLines)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+     </Target>
+ </Project>
+diff --git a/Dalamud/EntryPoint.cs b/Dalamud/EntryPoint.cs
+--- a/Dalamud/EntryPoint.cs
++++ b/Dalamud/EntryPoint.cs
+@@ -7,6 +7,7 @@
+ 
+ using Dalamud.Common;
+ using Dalamud.Configuration.Internal;
++using Dalamud.Hooking;
+ using Dalamud.Interface.Internal.Windows;
+ using Dalamud.Logging.Internal;
+ using Dalamud.Logging.Retention;
+@@ -14,18 +15,13 @@
+ using Dalamud.Storage;
+ using Dalamud.Support;
+ using Dalamud.Utility;
+-
+ using FFXIVClientStructs.FFXIV.Client.System.Framework;
+-
+ using Newtonsoft.Json;
+-
+ using Reloaded.Hooks;
+ using Reloaded.Hooks.Definitions;
+-
+ using Serilog;
+ using Serilog.Core;
+ using Serilog.Events;
+-
+ using Windows.Win32.Foundation;
+ using Windows.Win32.UI.WindowsAndMessaging;
+ 
+@@ -123,10 +119,28 @@
+     /// </summary>
+     internal static unsafe void SetupGlobalDestroyHook()
+     {
+-        globalFrameworkDestroyHook = ReloadedHooks.Instance.CreateHook<Framework.Delegates.Destroy>(
+-            GlobalFrameworkDestroyDetour,
+-            (long)Framework.StaticVirtualTablePointer->Destroy);
+-        globalFrameworkDestroyHook.Activate();
++        try
++        {
++            globalFrameworkDestroyHook = ReloadedHooks.Instance.CreateHook<Framework.Delegates.Destroy>(
++                GlobalFrameworkDestroyDetour,
++                (long)Framework.StaticVirtualTablePointer->Destroy);
++            globalFrameworkDestroyHook.Activate();
++        }
++        catch (Exception ex)
++        {
++            HookUtility.LogHookingErrorWithAddressSpaceInformation(ex, (IntPtr)Framework.StaticVirtualTablePointer->Destroy);
++            throw;
++        }
++    }
++
++    // Log some stuff to debug hook failures
++    private static unsafe void LogAddressSpaceInfo()
++    {
++        Windows.Win32.PInvoke.GetSystemInfo(out var systemInfo);
++
++        Log.Information("lpMinimumApplicationAddress: {MinAddr:x}\tlpMaximumApplicationAddress: {MaxAddr:x}",
++            (IntPtr)systemInfo.lpMinimumApplicationAddress,
++            (IntPtr)systemInfo.lpMaximumApplicationAddress);
+     }
+ 
+     /// <summary>
+@@ -141,6 +155,8 @@
+         // Setup logger
+         InitLogging(info.LogPath!, info.BootShowConsole, true, info.LogName);
+         SerilogEventSink.Instance.LogLine += SerilogOnLogLine;
++
++        LogAddressSpaceInfo();
+ 
+         // Load configuration first to get some early persistent state, like log level
+         var fs = new ReliableFileStorage(Path.GetDirectoryName(info.ConfigurationPath)!);
+diff --git a/Dalamud/Game/Addon/Lifecycle/AddonArgTypes/AddonArgs.cs b/Dalamud/Game/Addon/Lifecycle/AddonArgTypes/AddonArgs.cs
+--- a/Dalamud/Game/Addon/Lifecycle/AddonArgTypes/AddonArgs.cs
++++ b/Dalamud/Game/Addon/Lifecycle/AddonArgTypes/AddonArgs.cs
+@@ -11,9 +11,8 @@
+     /// <summary>
+     /// Constant string representing the name of an addon that is invalid.
+     /// </summary>
++    [Obsolete("AddonName can never be null or invalid. This check is unnecessary.")]
+     public const string InvalidAddonName = "NullAddon";
+-
+-    private string? addonName;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="AddonArgs"/> class.
+@@ -25,30 +24,23 @@
+     /// <summary>
+     /// Gets the string representing the name of an addon that is invalid.
+     /// </summary>
++    [Obsolete("AddonName can never be null or invalid. This check is unnecessary.")]
+     public static ReadOnlySpan<byte> InvalidAddonNameSpan => "NullAddon"u8;
+ 
+     /// <summary>
+     /// Gets the name of the addon this args referrers to.
+     /// </summary>
+-    public string AddonName => this.Addon.IsNull ? InvalidAddonName : this.addonName ??= this.Addon.Name;
++    public string AddonName { get; internal init; } = string.Empty;
+ 
+     /// <summary>
+     /// Gets the name of the addon this args referrers to.
+     /// </summary>
+-    public ReadOnlySpan<byte> AddonNameSpan => this.Addon.IsNull ? InvalidAddonNameSpan : this.Addon.NameSpan.BeforeNull();
++    public ReadOnlySpan<byte> AddonNameSpan => this.Addon.NameSpan.BeforeNull();
+ 
+     /// <summary>
+     /// Gets the pointer to the addons AtkUnitBase.
+     /// </summary>
+-    public AtkUnitBasePtr Addon
+-    {
+-        get;
+-        internal set
+-        {
+-            field = value;
+-            this.addonName = null;
+-        }
+-    }
++    public AtkUnitBasePtr Addon { get; internal init; }
+ 
+     /// <summary>
+     /// Gets the type of these args.
+@@ -65,4 +57,12 @@
+     /// Only valid to be called from a Pre event listener not a Post event listener.
+     /// </summary>
+     public void PreventOriginal() => this.PreventOriginalRequested = true;
++
++    /// <summary>
++    /// Gets the typed pointer to the addons AtkUnitBase*.
++    /// </summary>
++    /// <typeparam name="T">AtkUnitBase.</typeparam>
++    /// <returns>Typed pointer to contained addons AtkUnitBase.</returns>
++    public unsafe T* GetAddonPointer<T>() where T : unmanaged
++        => (T*)this.Addon.Address;
+ }
+diff --git a/Dalamud/Game/Addon/Lifecycle/AddonVirtualTable.cs b/Dalamud/Game/Addon/Lifecycle/AddonVirtualTable.cs
+--- a/Dalamud/Game/Addon/Lifecycle/AddonVirtualTable.cs
++++ b/Dalamud/Game/Addon/Lifecycle/AddonVirtualTable.cs
+@@ -28,22 +28,22 @@
+     private readonly AddonLifecycle lifecycleService;
+ 
+     // Each addon gets its own set of args that are used to mutate the original call when used in pre-calls
+-    private readonly AddonSetupArgs setupArgs = new();
+-    private readonly AddonArgs finalizeArgs = new();
+-    private readonly AddonArgs drawArgs = new();
+-    private readonly AddonArgs updateArgs = new();
+-    private readonly AddonRefreshArgs refreshArgs = new();
+-    private readonly AddonRequestedUpdateArgs requestedUpdateArgs = new();
+-    private readonly AddonReceiveEventArgs receiveEventArgs = new();
+-    private readonly AddonArgs openArgs = new();
+-    private readonly AddonCloseArgs closeArgs = new();
+-    private readonly AddonShowArgs showArgs = new();
+-    private readonly AddonHideArgs hideArgs = new();
+-    private readonly AddonArgs onMoveArgs = new();
+-    private readonly AddonArgs onMouseOverArgs = new();
+-    private readonly AddonArgs onMouseOutArgs = new();
+-    private readonly AddonArgs focusArgs = new();
+-    private readonly AddonFocusChangedArgs focusChangedArgs = new();
++    private readonly AddonSetupArgs setupArgs;
++    private readonly AddonArgs finalizeArgs;
++    private readonly AddonArgs drawArgs;
++    private readonly AddonArgs updateArgs;
++    private readonly AddonRefreshArgs refreshArgs;
++    private readonly AddonRequestedUpdateArgs requestedUpdateArgs;
++    private readonly AddonReceiveEventArgs receiveEventArgs;
++    private readonly AddonArgs openArgs;
++    private readonly AddonCloseArgs closeArgs;
++    private readonly AddonShowArgs showArgs;
++    private readonly AddonHideArgs hideArgs;
++    private readonly AddonArgs onMoveArgs;
++    private readonly AddonArgs onMouseOverArgs;
++    private readonly AddonArgs onMouseOutArgs;
++    private readonly AddonArgs focusArgs;
++    private readonly AddonFocusChangedArgs focusChangedArgs;
+ 
+     private readonly AtkUnitBase* atkUnitBase;
+ 
+@@ -77,6 +77,25 @@
+         this.atkUnitBase = addon;
+         this.lifecycleService = lifecycleService;
+ 
++        var addonName = addon->NameString;
++
++        this.setupArgs = new AddonSetupArgs { Addon = addon, AddonName = addonName };
++        this.finalizeArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.drawArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.updateArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.refreshArgs = new AddonRefreshArgs { Addon = addon, AddonName = addonName };
++        this.requestedUpdateArgs = new AddonRequestedUpdateArgs { Addon = addon, AddonName = addonName };
++        this.receiveEventArgs = new AddonReceiveEventArgs { Addon = addon, AddonName = addonName };
++        this.openArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.closeArgs = new AddonCloseArgs { Addon = addon, AddonName = addonName };
++        this.showArgs = new AddonShowArgs { Addon = addon, AddonName = addonName };
++        this.hideArgs = new AddonHideArgs { Addon = addon, AddonName = addonName };
++        this.onMoveArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.onMouseOverArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.onMouseOutArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.focusArgs = new AddonArgs { Addon = addon, AddonName = addonName };
++        this.focusChangedArgs = new AddonFocusChangedArgs { Addon = addon, AddonName = addonName };
++
+         // Save original virtual table
+         this.OriginalVirtualTable = addon->VirtualTable;
+ 
+@@ -184,7 +203,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.setupArgs.PreventOriginalRequested = false;
+-            this.setupArgs.Addon = addon;
+             this.setupArgs.AtkValueCount = valueCount;
+             this.setupArgs.AtkValues = (nint)values;
+ 
+@@ -220,7 +238,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.finalizeArgs.PreventOriginalRequested = false;
+-            this.finalizeArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreFinalize, this.finalizeArgs);
+ 
+@@ -249,7 +266,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.drawArgs.PreventOriginalRequested = false;
+-            this.drawArgs.Addon = addon;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreDraw, this.drawArgs);
+ 
+@@ -280,7 +296,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.updateArgs.PreventOriginalRequested = false;
+-            this.updateArgs.Addon = addon;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreUpdate, this.updateArgs);
+ 
+@@ -317,7 +332,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.refreshArgs.PreventOriginalRequested = false;
+-            this.refreshArgs.Addon = addon;
+             this.refreshArgs.AtkValueCount = valueCount;
+             this.refreshArgs.AtkValues = (nint)values;
+ 
+@@ -355,7 +369,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.requestedUpdateArgs.PreventOriginalRequested = false;
+-            this.requestedUpdateArgs.Addon = addon;
+             this.requestedUpdateArgs.NumberArrayData = (nint)numberArrayData;
+             this.requestedUpdateArgs.StringArrayData = (nint)stringArrayData;
+ 
+@@ -391,7 +404,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.receiveEventArgs.PreventOriginalRequested = false;
+-            this.receiveEventArgs.Addon = (nint)addon;
+             this.receiveEventArgs.AtkEventType = (AddonEventType)eventType;
+             this.receiveEventArgs.EventParam = eventParam;
+             this.receiveEventArgs.AtkEvent = (IntPtr)atkEvent;
+@@ -437,7 +449,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.openArgs.PreventOriginalRequested = false;
+-            this.openArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreOpen, this.openArgs);
+ 
+@@ -472,7 +483,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.closeArgs.PreventOriginalRequested = false;
+-            this.closeArgs.Addon = thisPtr;
+             this.closeArgs.FireCallback = fireCallback;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreClose, this.closeArgs);
+@@ -508,7 +518,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.showArgs.PreventOriginalRequested = false;
+-            this.showArgs.Addon = thisPtr;
+             this.showArgs.SilenceOpenSoundEffect = silenceOpenSoundEffect;
+             this.showArgs.UnsetShowHideFlags = unsetShowHideFlags;
+ 
+@@ -544,7 +553,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.hideArgs.PreventOriginalRequested = false;
+-            this.hideArgs.Addon = thisPtr;
+             this.hideArgs.UnknownBool = unkBool;
+             this.hideArgs.CallHideCallback = callHideCallback;
+             this.hideArgs.SetShowHideFlags = setShowHideFlags;
+@@ -582,7 +590,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.onMoveArgs.PreventOriginalRequested = false;
+-            this.onMoveArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreMove, this.onMoveArgs);
+ 
+@@ -613,7 +620,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.onMouseOverArgs.PreventOriginalRequested = false;
+-            this.onMouseOverArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreMouseOver, this.onMouseOverArgs);
+ 
+@@ -644,7 +650,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.onMouseOutArgs.PreventOriginalRequested = false;
+-            this.onMouseOutArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreMouseOut, this.onMouseOutArgs);
+ 
+@@ -675,7 +680,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.focusArgs.PreventOriginalRequested = false;
+-            this.focusArgs.Addon = thisPtr;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreFocus, this.focusArgs);
+ 
+@@ -706,7 +710,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.focusChangedArgs.PreventOriginalRequested = false;
+-            this.focusChangedArgs.Addon = thisPtr;
+             this.focusChangedArgs.ShouldFocus = isFocused;
+ 
+             this.lifecycleService.InvokeListenersSafely(AddonEvent.PreFocusChanged, this.focusChangedArgs);
+diff --git a/Dalamud/Game/Agent/AgentArgTypes/AgentArgs.cs b/Dalamud/Game/Agent/AgentArgTypes/AgentArgs.cs
+--- a/Dalamud/Game/Agent/AgentArgTypes/AgentArgs.cs
++++ b/Dalamud/Game/Agent/AgentArgTypes/AgentArgs.cs
+@@ -17,12 +17,12 @@
+     /// <summary>
+     /// Gets the pointer to the Agents AgentInterface*.
+     /// </summary>
+-    public AgentInterfacePtr Agent { get; internal set; }
++    public AgentInterfacePtr Agent { get; internal init; }
+ 
+     /// <summary>
+     /// Gets the agent id.
+     /// </summary>
+-    public AgentId AgentId { get; internal set; }
++    public AgentId AgentId { get; internal init; }
+ 
+     /// <summary>
+     /// Gets the type of these args.
+diff --git a/Dalamud/Game/Agent/AgentVirtualTable.cs b/Dalamud/Game/Agent/AgentVirtualTable.cs
+--- a/Dalamud/Game/Agent/AgentVirtualTable.cs
++++ b/Dalamud/Game/Agent/AgentVirtualTable.cs
+@@ -30,14 +30,14 @@
+     private readonly AgentId agentId;
+ 
+     // Each agent gets its own set of args that are used to mutate the original call when used in pre-calls
+-    private readonly AgentReceiveEventArgs receiveEventArgs = new();
+-    private readonly AgentReceiveEventArgs receiveEventWithResultArgs = new();
+-    private readonly AgentArgs showArgs = new();
+-    private readonly AgentArgs hideArgs = new();
+-    private readonly AgentArgs updateArgs = new();
+-    private readonly AgentGameEventArgs gameEventArgs = new();
+-    private readonly AgentLevelChangeArgs levelChangeArgs = new();
+-    private readonly AgentClassJobChangeArgs classJobChangeArgs = new();
++    private readonly AgentReceiveEventArgs receiveEventArgs;
++    private readonly AgentReceiveEventArgs receiveEventWithResultArgs;
++    private readonly AgentArgs showArgs;
++    private readonly AgentArgs hideArgs;
++    private readonly AgentArgs updateArgs;
++    private readonly AgentGameEventArgs gameEventArgs;
++    private readonly AgentLevelChangeArgs levelChangeArgs;
++    private readonly AgentClassJobChangeArgs classJobChangeArgs;
+ 
+     private readonly AgentInterface* agentInterface;
+ 
+@@ -64,6 +64,15 @@
+         this.agentId = agentId;
+         this.lifecycleService = lifecycleService;
+ 
++        this.receiveEventArgs = new AgentReceiveEventArgs { Agent = agent, AgentId = agentId };
++        this.receiveEventWithResultArgs = new AgentReceiveEventArgs { Agent = agent, AgentId = agentId };
++        this.showArgs = new AgentArgs { Agent = agent, AgentId = agentId };
++        this.hideArgs = new AgentArgs { Agent = agent, AgentId = agentId };
++        this.updateArgs = new AgentArgs { Agent = agent, AgentId = agentId };
++        this.gameEventArgs = new AgentGameEventArgs { Agent = agent, AgentId = agentId };
++        this.levelChangeArgs = new AgentLevelChangeArgs { Agent = agent, AgentId = agentId };
++        this.classJobChangeArgs = new AgentClassJobChangeArgs { Agent = agent, AgentId = agentId };
++
+         // Save original virtual table
+         this.OriginalVirtualTable = agent->VirtualTable;
+ 
+@@ -124,8 +133,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.receiveEventArgs.PreventOriginalRequested = false;
+-            this.receiveEventArgs.Agent = thisPtr;
+-            this.receiveEventArgs.AgentId = this.agentId;
+             this.receiveEventArgs.ReturnValue = (nint)returnValue;
+             this.receiveEventArgs.AtkValues = (nint)values;
+             this.receiveEventArgs.ValueCount = valueCount;
+@@ -174,8 +181,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.receiveEventWithResultArgs.PreventOriginalRequested = false;
+-            this.receiveEventWithResultArgs.Agent = thisPtr;
+-            this.receiveEventWithResultArgs.AgentId = this.agentId;
+             this.receiveEventWithResultArgs.ReturnValue = (nint)returnValue;
+             this.receiveEventWithResultArgs.AtkValues = (nint)values;
+             this.receiveEventWithResultArgs.ValueCount = valueCount;
+@@ -222,8 +227,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.showArgs.PreventOriginalRequested = false;
+-            this.showArgs.Agent = thisPtr;
+-            this.showArgs.AgentId = this.agentId;
+ 
+             this.lifecycleService.InvokeListenersSafely(AgentEvent.PreShow, this.showArgs);
+ 
+@@ -254,8 +257,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.hideArgs.PreventOriginalRequested = false;
+-            this.hideArgs.Agent = thisPtr;
+-            this.hideArgs.AgentId = this.agentId;
+ 
+             this.lifecycleService.InvokeListenersSafely(AgentEvent.PreHide, this.hideArgs);
+ 
+@@ -286,8 +287,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.updateArgs.PreventOriginalRequested = false;
+-            this.updateArgs.Agent = thisPtr;
+-            this.updateArgs.AgentId = this.agentId;
+ 
+             this.lifecycleService.InvokeListenersSafely(AgentEvent.PreUpdate, this.updateArgs);
+ 
+@@ -318,8 +317,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.gameEventArgs.PreventOriginalRequested = false;
+-            this.gameEventArgs.Agent = thisPtr;
+-            this.gameEventArgs.AgentId = this.agentId;
+             this.gameEventArgs.GameEvent = (int)gameEvent;
+ 
+             this.lifecycleService.InvokeListenersSafely(AgentEvent.PreGameEvent, this.gameEventArgs);
+@@ -353,8 +350,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.levelChangeArgs.PreventOriginalRequested = false;
+-            this.levelChangeArgs.Agent = thisPtr;
+-            this.levelChangeArgs.AgentId = this.agentId;
+             this.levelChangeArgs.ClassJobId = classJobId;
+             this.levelChangeArgs.Level = level;
+ 
+@@ -390,8 +385,6 @@
+             this.LogEvent(EnableLogging);
+ 
+             this.classJobChangeArgs.PreventOriginalRequested = false;
+-            this.classJobChangeArgs.Agent = thisPtr;
+-            this.classJobChangeArgs.AgentId = this.agentId;
+             this.classJobChangeArgs.ClassJobId = classJobId;
+ 
+             this.lifecycleService.InvokeListenersSafely(AgentEvent.PreClassJobChange, this.classJobChangeArgs);
+diff --git a/Dalamud/Game/ChatHandlers.cs b/Dalamud/Game/ChatHandlers.cs
+--- a/Dalamud/Game/ChatHandlers.cs
++++ b/Dalamud/Game/ChatHandlers.cs
+@@ -42,11 +42,6 @@
+     /// </summary>
+     public string? LastLink { get; private set; }
+ 
+-    /// <summary>
+-    /// Gets a value indicating whether auto-updates have already completed this session.
+-    /// </summary>
+-    public bool IsAutoUpdateComplete { get; private set; }
+-
+     [GeneratedRegex(@"(http|ftp|https)://([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?", RegexOptions.Compiled)]
+     private static partial Regex CompiledUrlRegex();
+ 
+@@ -67,18 +62,24 @@
+     private void OnChatMessage(IHandleableChatMessage message)
+     {
+         var clientState = Service<ClientState.ClientState>.GetNullable();
+-        if (clientState == null)
++        if (clientState is null)
++        {
+             return;
++        }
+ 
+         if (message.LogKind == XivChatType.Notice)
+         {
+             if (!this.hasSeenLoadingMsg)
++            {
+                 this.PrintWelcomeMessage();
++            }
+         }
+ 
+         // For injections while logged in
+         if (clientState.IsLoggedIn && clientState.TerritoryType == 0 && !this.hasSeenLoadingMsg)
++        {
+             this.PrintWelcomeMessage();
++        }
+ 
+ #if !DEBUG && false
+             if (!this.hasSeenLoadingMsg)
+@@ -87,7 +88,9 @@
+ 
+         var linkMatch = CompiledUrlRegex().Match(message.Message.TextValue);
+         if (linkMatch.Value.Length > 0)
++        {
+             this.LastLink = linkMatch.Value;
++        }
+     }
+ 
+     private void PrintWelcomeMessage()
+@@ -95,9 +98,12 @@
+         var chatGui = Service<ChatGui>.GetNullable();
+         var pluginManager = Service<PluginManager>.GetNullable();
+         var dalamudInterface = Service<DalamudInterface>.GetNullable();
++        var dalamudConfig = Service<DalamudConfiguration>.GetNullable();
+ 
+-        if (chatGui == null || pluginManager == null || dalamudInterface == null)
++        if (chatGui is null || pluginManager is null || dalamudInterface is null)
++        {
+             return;
++        }
+ 
+         if (this.configuration.PrintDalamudWelcomeMsg)
+         {
+@@ -123,7 +129,7 @@
+                 .AddUiForeground(500)
+                 .AddText("  [ ")
+                 .Add(linkPayload)
+-                .AddText(Loc.Localize("DalamudClickToViewChangelogs", "Click here to view the changelog."))
++                .AddText(Loc.Localize("DalamudClickToViewChangelogs", "Click here to view the changelog"))
+                 .Add(RawPayload.LinkTerminator)
+                 .AddText(" ]")
+                 .AddUiForegroundOff();
+@@ -138,6 +144,28 @@
+             this.configuration.QueueSave();
+         }
+ 
++        if (dalamudConfig?.DevMode ?? false)
++        {
++            var linkPayload = chatGui.AddChatLinkHandler(
++                (_, _) => dalamudInterface.OpenSettingsTo(SettingsOpenKind.Experimental));
++
++            var devModeWarningMessage = new SeStringBuilder()
++                .AddText(Loc.Localize("DeveloperModeEnabledWarning", "Developer Mode is enabled."))
++                .AddUiForeground(500)
++                .AddText("  [ ")
++                .Add(linkPayload)
++                .AddText(Loc.Localize("DeveloperModeMoreInfoLink", "Learn more here"))
++                .Add(RawPayload.LinkTerminator)
++                .AddText(" ]")
++                .AddUiForegroundOff();
++
++            chatGui.Print(new XivChatEntry
++            {
++                Message = devModeWarningMessage.Build(),
++                Type = XivChatType.Notice,
++            });
++        }
++
+         this.hasSeenLoadingMsg = true;
+     }
+ }
+diff --git a/Dalamud/Game/ClientState/GamePad/GamepadState.cs b/Dalamud/Game/ClientState/GamePad/GamepadState.cs
+--- a/Dalamud/Game/ClientState/GamePad/GamepadState.cs
++++ b/Dalamud/Game/ClientState/GamePad/GamepadState.cs
+@@ -2,7 +2,6 @@
+ 
+ using Dalamud.Bindings.ImGui;
+ using Dalamud.Hooking;
+-using Dalamud.Interface.Internal;
+ using Dalamud.IoC;
+ using Dalamud.IoC.Internal;
+ using Dalamud.Logging.Internal;
+@@ -23,9 +22,6 @@
+ internal unsafe class GamepadState : IInternalDisposableService, IGamepadState
+ {
+     private static readonly ModuleLog Log = ModuleLog.Create<GamepadState>();
+-
+-    [ServiceManager.ServiceDependency]
+-    private readonly DalamudInterface dalamudInterface = Service<DalamudInterface>.Get();
+ 
+     private Hook<PadDevice.Delegates.Update> gamepadPollHook;
+     private int leftStickX;
+@@ -53,19 +49,17 @@
+         get => field;
+         set
+         {
+-            field = value;
+-
+             var gamepadEnabled = (ImGui.GetIO().BackendFlags & ImGuiBackendFlags.HasGamepad) > 0;
+ 
+-            if (value && gamepadEnabled)
++            field = value && gamepadEnabled;
++
++            if (field)
+             {
+                 ImGui.GetIO().ConfigFlags |= ImGuiConfigFlags.NavEnableGamepad;
+-                this.dalamudInterface.OpenGamepadModeNotifierWindow();
+             }
+             else
+             {
+                 ImGui.GetIO().ConfigFlags &= ~ImGuiConfigFlags.NavEnableGamepad;
+-                this.dalamudInterface.CloseGamepadModeNotifierWindow();
+             }
+         }
+     }
+@@ -182,7 +176,7 @@
+             Log.Error(e, "Unexpected error in PadDeviceUpdateDetour. Gamepad navigation will not work!");
+ 
+             // NOTE (Chiv) Explicitly deactivate on error
+-            ImGui.GetIO().ConfigFlags &= ~ImGuiConfigFlags.NavEnableGamepad;
++            this.EnableGamepadNav = false;
+         }
+     }
+ }
+diff --git a/Dalamud/Game/Framework.cs b/Dalamud/Game/Framework.cs
+--- a/Dalamud/Game/Framework.cs
++++ b/Dalamud/Game/Framework.cs
+@@ -412,7 +412,7 @@
+             }
+         }
+ 
+-        static string GetFullHandlerName(IFramework.OnUpdateDelegate d) => $"{d.Target}::{d.Method.Name}";
++        static string GetFullHandlerName(IFramework.OnUpdateDelegate d) => $"{d.Method.DeclaringType?.FullName ?? d.Target}::{d.Method.Name}";
+     }
+ 
+     private unsafe bool HandleFrameworkUpdate(CSFramework* thisPtr)
+diff --git a/Dalamud/Game/Gui/NamePlate/NamePlateGui.cs b/Dalamud/Game/Gui/NamePlate/NamePlateGui.cs
+--- a/Dalamud/Game/Gui/NamePlate/NamePlateGui.cs
++++ b/Dalamud/Game/Gui/NamePlate/NamePlateGui.cs
+@@ -141,8 +141,10 @@
+ 
+         try
+         {
+-            if (this.OnDataUpdate == null && this.OnNamePlateUpdate == null && this.OnPostDataUpdate == null &&
+-                this.OnPostNamePlateUpdate == null)
++            var hasNoSubscribers = this.OnDataUpdate == null && this.OnNamePlateUpdate == null && this.OnPostDataUpdate == null
++                                   && this.OnPostNamePlateUpdate == null;
++
++            if (hasNoSubscribers && !this.pendingForceRedraw)
+             {
+                 return;
+             }
+@@ -161,6 +163,19 @@
+ 
+             var activeHandlers = this.updateHandlers[..activeNamePlateCount];
+ 
++            if (hasNoSubscribers)
++            {
++                this.pendingForceRedraw = false;
++
++                foreach (var handler in activeHandlers)
++                {
++                    handler.ResetState();
++                    handler.UpdateFlags |= 3;
++                }
++
++                return;
++            }
++
+             if (this.pendingForceRedraw)
+             {
+                 this.pendingForceRedraw = false;
+@@ -169,7 +184,7 @@
+                 foreach (var handler in activeHandlers)
+                 {
+                     handler.ResetState();
+-                    handler.IsUpdating = true;
++                    handler.UpdateFlags |= 3;
+                 }
+ 
+                 this.OnDataUpdate?.InvokeSafely(this.context, activeHandlers);
+diff --git a/Dalamud/Game/Gui/NamePlate/NamePlateUpdateHandler.cs b/Dalamud/Game/Gui/NamePlate/NamePlateUpdateHandler.cs
+--- a/Dalamud/Game/Gui/NamePlate/NamePlateUpdateHandler.cs
++++ b/Dalamud/Game/Gui/NamePlate/NamePlateUpdateHandler.cs
+@@ -375,7 +375,7 @@
+     public int UpdateFlags
+     {
+         get => this.ObjectData->UpdateFlags;
+-        private set => this.ObjectData->UpdateFlags = value;
++        internal set => this.ObjectData->UpdateFlags = value;
+     }
+ 
+     /// <inheritdoc/>
+@@ -432,11 +432,7 @@
+     }
+ 
+     /// <inheritdoc/>
+-    public bool IsUpdating
+-    {
+-        get => (this.UpdateFlags & 1) != 0;
+-        internal set => this.UpdateFlags = value ? this.UpdateFlags | 1 : this.UpdateFlags & ~1;
+-    }
++    public bool IsUpdating => (this.UpdateFlags & 1) != 0;
+ 
+     /// <inheritdoc/>
+     public bool IsPrefixTitle
+diff --git a/Dalamud/Game/Gui/PartyFinder/Types/PartyFinderSlot.cs b/Dalamud/Game/Gui/PartyFinder/Types/PartyFinderSlot.cs
+--- a/Dalamud/Game/Gui/PartyFinder/Types/PartyFinderSlot.cs
++++ b/Dalamud/Game/Gui/PartyFinder/Types/PartyFinderSlot.cs
+@@ -29,5 +29,5 @@
+     /// Tests if this slot is accepting a job.
+     /// </summary>
+     /// <param name="flag">Job to test.</param>
+-    public bool this[JobFlags flag] => (this.accepting & (uint)flag) > 0;
++    public bool this[JobFlags flag] => (this.accepting & (ulong)flag) != 0;
+ }
+diff --git a/Dalamud/Game/Internal/SystemMenuIntegration.cs b/Dalamud/Game/Internal/SystemMenuIntegration.cs
+--- a/Dalamud/Game/Internal/SystemMenuIntegration.cs
++++ b/Dalamud/Game/Internal/SystemMenuIntegration.cs
+@@ -1,6 +1,11 @@
+ using CheapLoc;
+ 
+ using Dalamud.Configuration.Internal;
++using Dalamud.Game.Addon.Events;
++using Dalamud.Game.Addon.Lifecycle;
++using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
++using Dalamud.Game.ClientState.GamePad;
++using Dalamud.Game.Gui;
+ using Dalamud.Game.Gui.ContextMenu;
+ using Dalamud.Game.Text;
+ using Dalamud.Hooking;
+@@ -9,6 +14,8 @@
+ using Dalamud.Logging.Internal;
+ using Dalamud.Utility;
+ 
++using FFXIVClientStructs.FFXIV.Client.System.Input;
++using FFXIVClientStructs.FFXIV.Client.System.Memory;
+ using FFXIVClientStructs.FFXIV.Client.UI;
+ using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+ using FFXIVClientStructs.FFXIV.Component.GUI;
+@@ -22,6 +29,11 @@
+ [ServiceManager.EarlyLoadedService]
+ internal sealed unsafe class SystemMenuIntegration : IInternalDisposableService
+ {
++    private const int SystemMenuPluginsId = 69420;
++    private const int SystemMenuSettingsId = 69421;
++    private const int MainCrossPluginsId = 69422;
++    private const int MainCrossSettingsId = 69423;
++
+     private static readonly ModuleLog Log = ModuleLog.Create<SystemMenuIntegration>();
+ 
+     private readonly Hook<AgentHUD.Delegates.OpenSystemMenu> hookAgentHudOpenSystemMenu;
+@@ -33,7 +45,14 @@
+     // [ServiceManager.ServiceDependency]
+     // private readonly ContextMenu contextMenu = Service<ContextMenu>.Get();
+ 
+-    private bool disposed = false;
++    [ServiceManager.ServiceDependency]
++    private readonly AddonLifecycle addonLifecycle = Service<AddonLifecycle>.Get();
++
++    [ServiceManager.ServiceDependency]
++    private readonly Localization localization = Service<Localization>.Get();
++
++    private AddonLifecycleEventListener mainCrossPostSetupListener;
++    private AddonLifecycleEventListener mainCrossPostReceiveEventListener;
+ 
+     [ServiceManager.ServiceConstructor]
+     private SystemMenuIntegration()
+@@ -42,35 +61,224 @@
+         this.hookUiModuleExecuteMainCommand = Hook<UIModule.Delegates.ExecuteMainCommand>.FromAddress((nint)UIModule.StaticVirtualTablePointer->ExecuteMainCommand, this.UiModuleExecuteMainCommandDetour);
+ 
+         // this.contextMenu.ContextMenuOpened += this.ContextMenuOnContextMenuOpened;
++        this.localization.LocalizationChanged += this.OnLocalizationChanged;
+ 
+         this.hookAgentHudOpenSystemMenu.Enable();
+         this.hookUiModuleExecuteMainCommand.Enable();
+-    }
+-
+-    /// <summary>Finalizes an instance of the <see cref="SystemMenuIntegration"/> class.</summary>
+-    ~SystemMenuIntegration() => this.Dispose(false);
++
++        this.mainCrossPostSetupListener = new AddonLifecycleEventListener(AddonEvent.PostSetup, "_MainCross", this.OnMainCrossPostSetup);
++        this.mainCrossPostReceiveEventListener = new AddonLifecycleEventListener(AddonEvent.PostReceiveEvent, "_MainCross", this.OnMainCrossPostReceiveEvent);
++
++        this.addonLifecycle.RegisterListener(this.mainCrossPostSetupListener);
++        this.addonLifecycle.RegisterListener(this.mainCrossPostReceiveEventListener);
++    }
+ 
+     private string LocDalamudPlugins => Loc.Localize("SystemMenuPlugins", "Dalamud Plugins");
+ 
+     private string LocDalamudSettings => Loc.Localize("SystemMenuSettings", "Dalamud Settings");
+ 
++    private string LocDalamudPluginsDescription => Loc.Localize("SystemMenuPluginsDescription", "Opens the Dalamud Plugin Installer.");
++
++    private string LocDalamudSettingsDescription => Loc.Localize("SystemMenuSettingsDescription", "Opens the Dalamud Settings.");
++
+     /// <inheritdoc/>
+-    void IInternalDisposableService.DisposeService() => this.Dispose(true);
+-
+-    private void Dispose(bool disposing)
+-    {
+-        if (this.disposed)
+-            return;
+-
+-        if (disposing)
+-        {
+-            this.hookAgentHudOpenSystemMenu.Dispose();
+-            this.hookUiModuleExecuteMainCommand.Dispose();
+-
+-            // this.contextMenu.ContextMenuOpened -= this.ContextMenuOnContextMenuOpened;
+-        }
+-
+-        this.disposed = true;
++    void IInternalDisposableService.DisposeService()
++    {
++        this.hookAgentHudOpenSystemMenu.Dispose();
++        this.hookUiModuleExecuteMainCommand.Dispose();
++
++        // this.contextMenu.ContextMenuOpened -= this.ContextMenuOnContextMenuOpened;
++        this.localization.LocalizationChanged -= this.OnLocalizationChanged;
++
++        this.addonLifecycle.UnregisterListener(this.mainCrossPostSetupListener);
++        this.addonLifecycle.UnregisterListener(this.mainCrossPostReceiveEventListener);
++    }
++
++    private static T* NewDynamicArray<T>(int length) where T : unmanaged, ICreatable<T>
++    {
++        var ptr = (nint)IMemorySpace.GetUISpace()->Malloc((ulong)(nint.Size + sizeof(T) * length), 0);
++
++        *(nint*)ptr = length;
++
++        var elementsPtr = (T*)(ptr + nint.Size);
++
++        for (var i = 0; i < length; i++)
++            elementsPtr[i].Ctor();
++
++        return elementsPtr;
++    }
++
++    private static T* EnlargeArray<T>(T* oldArray, int oldLength, int length) where T : unmanaged
++    {
++        var oldSize = (ulong)(sizeof(T) * oldLength);
++        var newSize = (ulong)(sizeof(T) * length);
++
++        var newArray = (T*)IMemorySpace.GetUISpace()->Malloc(newSize, 0);
++
++        Buffer.MemoryCopy(oldArray, newArray, newSize, oldSize);
++
++        IMemorySpace.GetDefaultSpace()->AlignedFree(oldArray);
++
++        return newArray;
++    }
++
++    private void OnLocalizationChanged(string langCode)
++    {
++        var gameGui = Service<GameGui>.GetNullable();
++        if (gameGui == null)
++            return;
++
++        var addon = gameGui.GetAddonByName<AddonMainCross>("_MainCross"u8);
++        if (addon == null)
++            return;
++
++        foreach (ref var category in addon->CategoryData)
++        {
++            foreach (ref var item in category.Commands)
++            {
++                switch (item.RowId)
++                {
++                    case MainCrossPluginsId:
++                        this.SetMainCrossItemText(ref item, this.LocDalamudPlugins);
++                        break;
++                    case MainCrossSettingsId:
++                        this.SetMainCrossItemText(ref item, this.LocDalamudSettings);
++                        break;
++                }
++            }
++        }
++
++        addon->RefreshCurrentItemNodes();
++        addon->UpdateHelpText(false);
++    }
++
++    private void OnMainCrossPostSetup(AddonEvent type, AddonArgs args)
++    {
++        if (!this.configuration.DoButtonsSystemMenu)
++            return;
++
++        var addon = (AddonMainCross*)args.Addon.Address;
++
++        var oldItemNodeCount = addon->ItemMaxCount;
++        var newItemNodeCount = oldItemNodeCount + 2;
++
++        // Resize CurrentItemTweens
++        addon->CurrentItemTweens->Dtor(3); // delete[]
++        addon->CurrentItemTweens = NewDynamicArray<AtkSimpleTween>(newItemNodeCount); // new T[n]
++
++        // Resize CurrentItemNodes
++        addon->CurrentItemNodes = EnlargeArray(addon->CurrentItemNodes, oldItemNodeCount, newItemNodeCount);
++
++        // Add Dalamud commands (in reverse order so it's simpler)
++        var lastCategoryIndex = addon->CategoryData.Length - 1;
++        var category = addon->CategoryData.GetPointer(lastCategoryIndex);
++
++        var newItem = default(AddonMainCross.CommandData);
++        newItem.Label.Ctor();
++        newItem.LabelWithPatchMark.Ctor();
++
++        newItem.RowId = MainCrossSettingsId;
++        newItem.IconId = 14;
++        newItem.SortId = category->Commands.First->SortId - 1;
++        newItem.IsEnabled = true;
++        newItem.IsUnseen = false;
++        this.SetMainCrossItemText(ref newItem, this.LocDalamudSettings);
++        AddonMainCross.StdVectorCommandDataInsert(&category->Commands, category->Commands.First, &newItem);
++
++        newItem.RowId = MainCrossPluginsId;
++        newItem.IconId = 14;
++        newItem.SortId = category->Commands.First->SortId - 1;
++        newItem.IsEnabled = true;
++        newItem.IsUnseen = false;
++        this.SetMainCrossItemText(ref newItem, this.LocDalamudPlugins);
++        AddonMainCross.StdVectorCommandDataInsert(&category->Commands, category->Commands.First, &newItem);
++
++        newItem.Label.Dtor(false);
++        newItem.LabelWithPatchMark.Dtor(false);
++
++        // Create new ItemNodes
++        for (var colIdx = 0; colIdx < addon->ColumnNodes.Length; colIdx++)
++        {
++            ref var column = ref addon->ColumnNodes[colIdx];
++
++            column.ItemNodes = EnlargeArray(column.ItemNodes, oldItemNodeCount, newItemNodeCount);
++
++            ref var uldManager = ref column.ComponentNode->GetComponent()->UldManager;
++            var baseNodeId = uldManager.SearchNodeById(2)->GetBaseNodeId();
++            uldManager.DuplicateComponentNode(baseNodeId, 2, (uint)oldItemNodeCount); // duplicate 2 new nodes
++
++            for (var entryIdx = oldItemNodeCount; entryIdx < newItemNodeCount; entryIdx++)
++            {
++                ref var entryNode = ref column.ItemNodes[entryIdx];
++
++                entryNode.Node = (AtkComponentNode*)uldManager.GetDuplicatedNode(baseNodeId, (uint)entryIdx, 0);
++                entryNode.Component = uldManager.GetDuplicatedNode(baseNodeId, (uint)entryIdx, 0)->GetAsAtkComponentButton();
++                entryNode.TextNode = entryNode.Component->GetTextNodeById(2);
++            }
++        }
++
++        // Update length
++        addon->ItemMaxCount = newItemNodeCount;
++
++        // Push down default selection for category
++        addon->DefaultCategoryItemIndexes[lastCategoryIndex] += 2;
++
++        // Trigger refresh
++        addon->RefreshCurrentItemNodes();
++    }
++
++    private void OnMainCrossPostReceiveEvent(AddonEvent type, AddonArgs args)
++    {
++        if (args is not AddonReceiveEventArgs { AtkEventType: AddonEventType.InputReceived } receiveEventArgs)
++            return;
++
++        var inputData = (AtkEventData.AtkInputData*)receiveEventArgs.AtkEventData;
++        var inputId = (InputId)inputData->InputId;
++        if (inputId is not (InputId.LEFT or InputId.RIGHT or InputId.UP or InputId.DOWN))
++            return;
++
++        this.UpdateMainCrossHelpText((AddonMainCross*)args.Addon.Address);
++    }
++
++    private void SetMainCrossItemText(ref AddonMainCross.CommandData item, string text)
++    {
++        using var rssb = new RentedSeStringBuilder();
++
++        rssb
++            .PushColorType((ushort)IMenuItem.DalamudDefaultPrefixColor)
++            .PushEdgeColorBgra(0, 0, 0, 255)
++            .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
++            .PopEdgeColor()
++            .PopColorType()
++            .Append(text);
++
++        item.Label.SetString(rssb.GetViewAsSpan());
++        item.LabelWithPatchMark.SetString(rssb.GetViewAsSpan());
++    }
++
++    private void UpdateMainCrossHelpText(AddonMainCross* addon)
++    {
++        switch (addon->CategoryData[addon->SelectedCategory].Commands[addon->SelectedItem].RowId)
++        {
++            case MainCrossPluginsId:
++                SetHelpText(this.LocDalamudPluginsDescription);
++                break;
++
++            case MainCrossSettingsId:
++                SetHelpText(this.LocDalamudSettingsDescription);
++                break;
++        }
++
++        void SetHelpText(string text)
++        {
++            var componentNode = (AtkComponentNode*)addon->GetNodeById(5);
++            if (componentNode == null) return;
++
++            var textNode = componentNode->Component->GetTextNodeById(3);
++            if (textNode == null) return;
++
++            textNode->SetText(text);
++        }
+     }
+ 
+     /*
+@@ -152,7 +360,7 @@
+         using var rssb = new RentedSeStringBuilder();
+         var entryIndex = startIndex;
+ 
+-        values[entryIndex].SetInt(69420);
++        values[entryIndex].SetInt(SystemMenuPluginsId);
+         values[entryIndex + maxEntries].SetManagedString(rssb.Builder
+             .PushColorType(color)
+             .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
+@@ -163,7 +371,7 @@
+         rssb.Builder.Clear();
+         entryIndex++;
+ 
+-        values[entryIndex].SetInt(69421);
++        values[entryIndex].SetInt(SystemMenuSettingsId);
+         values[entryIndex + maxEntries].SetManagedString(rssb.Builder
+             .PushColorType(color)
+             .Append($"{IMenuItem.DalamudDefaultPrefix.ToIconString()} ")
+@@ -176,15 +384,21 @@
+ 
+     private void UiModuleExecuteMainCommandDetour(UIModule* thisPtr, uint commandId)
+     {
+-        var dalamudInterface = Service<DalamudInterface>.GetNullable();
+-
+         switch (commandId)
+         {
+-            case 69420:
+-                dalamudInterface?.OpenPluginInstaller();
+-                break;
+-            case 69421:
+-                dalamudInterface?.OpenSettings();
++            case SystemMenuPluginsId:
++                Service<DalamudInterface>.GetNullable()?.OpenPluginInstaller();
++                break;
++            case SystemMenuSettingsId:
++                Service<DalamudInterface>.GetNullable()?.OpenSettings();
++                break;
++            case MainCrossPluginsId:
++                Service<GamepadState>.GetNullable()?.EnableGamepadNav = true;
++                Service<DalamudInterface>.GetNullable()?.OpenPluginInstaller();
++                break;
++            case MainCrossSettingsId:
++                Service<GamepadState>.GetNullable()?.EnableGamepadNav = true;
++                Service<DalamudInterface>.GetNullable()?.OpenSettings();
+                 break;
+             default:
+                 this.hookUiModuleExecuteMainCommand.Original(thisPtr, commandId);
+diff --git a/Dalamud/Hooking/Hook.cs b/Dalamud/Hooking/Hook.cs
+--- a/Dalamud/Hooking/Hook.cs
++++ b/Dalamud/Hooking/Hook.cs
+@@ -247,19 +247,7 @@
+         }
+         catch (Exception ex)
+         {
+-            try
+-            {
+-                Log.Error(
+-                    ex,
+-                    "Could not set up a hook at {Address}\n{Report}",
+-                    Util.DescribeAddress(address),
+-                    AddressSpaceAnalysis.BuildReport(address));
+-            }
+-            catch (Exception reportEx)
+-            {
+-                Log.Error(reportEx, "Could not build an address space report for the failed hook");
+-            }
+-
++            HookUtility.LogHookingErrorWithAddressSpaceInformation(ex, address);
+             throw;
+         }
+     }
+diff --git a/Dalamud/Hooking/HookUtility.cs b/Dalamud/Hooking/HookUtility.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Hooking/HookUtility.cs
+@@ -0,0 +1,33 @@
++using Dalamud.Memory;
++using Dalamud.Utility;
++
++using Serilog;
++
++namespace Dalamud.Hooking;
++
++/// <summary>
++/// Helpers related to hooks.
++/// </summary>
++internal class HookUtility
++{
++    /// <summary>
++    /// Write a message to the log containing information about a failed hooking attempt, including the address space around it.
++    /// </summary>
++    /// <param name="ex">The exception that occurred.</param>
++    /// <param name="address">The address to describe/log around.</param>
++    internal static void LogHookingErrorWithAddressSpaceInformation(Exception ex, IntPtr address)
++    {
++        try
++        {
++            Log.Error(
++                ex,
++                "Could not set up a hook at {Address}\n{Report}",
++                Util.DescribeAddress(address),
++                AddressSpaceAnalysis.BuildReport(address));
++        }
++        catch (Exception reportEx)
++        {
++            Log.Error(reportEx, "Could not build an address space report for the failed hook");
++        }
++    }
++}
+diff --git a/Dalamud/Interface/ImGuiBackend/Helpers/ImGuiViewportHelpers.cs b/Dalamud/Interface/ImGuiBackend/Helpers/ImGuiViewportHelpers.cs
+--- a/Dalamud/Interface/ImGuiBackend/Helpers/ImGuiViewportHelpers.cs
++++ b/Dalamud/Interface/ImGuiBackend/Helpers/ImGuiViewportHelpers.cs
+@@ -1,13 +1,6 @@
+-using System.Diagnostics;
+-using System.Linq;
+ using System.Numerics;
+-using System.Runtime.InteropServices;
+ 
+ using Dalamud.Bindings.ImGui;
+-
+-using TerraFX.Interop.Windows;
+-
+-using static TerraFX.Interop.Windows.Windows;
+ 
+ namespace Dalamud.Interface.ImGuiBackend.Helpers;
+ 
+@@ -137,29 +130,4 @@
+     /// </summary>
+     /// <param name="viewport">An instance of <see cref="ImGuiViewportPtr"/>.</param>
+     public delegate void ChangedViewportDelegate(ImGuiViewportPtr viewport);
+-
+-    /// <summary>
+-    /// Disables ImGui from disabling alpha for Viewport window backgrounds.
+-    /// </summary>
+-    public static unsafe void EnableViewportWindowBackgroundAlpha()
+-    {
+-        // TODO: patch imgui.cpp:6126, which disables background transparency for extra viewport windows
+-        var offset = 0x00007FFB6ADA632C - 0x00007FFB6AD60000;
+-        offset += Process.GetCurrentProcess().Modules.Cast<ProcessModule>().First(x => x.ModuleName == "cimgui.dll")
+-                         .BaseAddress;
+-        var b = (byte*)offset;
+-        uint old;
+-        if (!VirtualProtect(b, 1, PAGE.PAGE_EXECUTE_READWRITE, &old))
+-        {
+-            throw Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error())
+-                  ?? throw new InvalidOperationException($"{nameof(VirtualProtect)} failed.");
+-        }
+-
+-        *b = 0xEB;
+-        if (!VirtualProtect(b, 1, old, &old))
+-        {
+-            throw Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error())
+-                  ?? throw new InvalidOperationException($"{nameof(VirtualProtect)} failed.");
+-        }
+-    }
+ }
+diff --git a/Dalamud/Interface/ImGuiBackend/Renderers/Dx11Renderer.cs b/Dalamud/Interface/ImGuiBackend/Renderers/Dx11Renderer.cs
+--- a/Dalamud/Interface/ImGuiBackend/Renderers/Dx11Renderer.cs
++++ b/Dalamud/Interface/ImGuiBackend/Renderers/Dx11Renderer.cs
+@@ -117,8 +117,6 @@
+                     fixed (IDCompositionDevice** pp = &this.dcompDevice.GetPinnableReference())
+                     fixed (Guid* piidDCompositionDevice = &IID.IID_IDCompositionDevice)
+                         DirectX.DCompositionCreateDevice(null, piidDCompositionDevice, (void**)pp).ThrowOnError();
+-
+-                    ImGuiViewportHelpers.EnableViewportWindowBackgroundAlpha();
+                 }
+                 catch
+                 {
+diff --git a/Dalamud/Interface/Internal/DalamudInterface.cs b/Dalamud/Interface/Internal/DalamudInterface.cs
+--- a/Dalamud/Interface/Internal/DalamudInterface.cs
++++ b/Dalamud/Interface/Internal/DalamudInterface.cs
+@@ -17,6 +17,7 @@
+ using Dalamud.Game.Agent;
+ using Dalamud.Game.ClientState;
+ using Dalamud.Game.ClientState.Conditions;
++using Dalamud.Game.ClientState.GamePad;
+ using Dalamud.Game.ClientState.Keys;
+ using Dalamud.Game.Gui;
+ using Dalamud.Hooking;
+@@ -71,7 +72,7 @@
+     private readonly ColorDemoWindow colorDemoWindow;
+     private readonly ComponentDemoWindow componentDemoWindow;
+     private readonly DataWindow dataWindow;
+-    private readonly GamepadModeNotifierWindow gamepadModeNotifierWindow;
++    private readonly GamepadModeNotifier gamepadModeNotifier;
+     private readonly ConsoleWindow consoleWindow;
+     private readonly PluginStatWindow pluginStatWindow;
+     private readonly PluginInstallerWindow pluginWindow;
+@@ -83,8 +84,8 @@
+     private readonly BranchSwitcherWindow branchSwitcherWindow;
+     private readonly HitchSettingsWindow hitchSettingsWindow;
+ 
++    private readonly OutCubic creditsDarkeningAnimation = new(TimeSpan.FromSeconds(10));
+     private bool isCreditsDarkening = false;
+-    private OutCubic creditsDarkeningAnimation = new(TimeSpan.FromSeconds(10));
+ 
+     private bool hasDrawError = false;
+     private Exception? lastDrawError = null;
+@@ -113,7 +114,7 @@
+         InterfaceManager interfaceManager,
+         PluginImageCache pluginImageCache,
+         DalamudAssetManager dalamudAssetManager,
+-        Game.Framework framework,
++        Framework framework,
+         ClientState clientState,
+         TitleScreenMenu titleScreenMenu,
+         GameGui gameGui,
+@@ -127,16 +128,16 @@
+ 
+         this.WindowSystem = new WindowSystem("DalamudCore");
+ 
+-        this.colorDemoWindow = new ColorDemoWindow() { IsOpen = false };
+-        this.componentDemoWindow = new ComponentDemoWindow() { IsOpen = false };
+-        this.dataWindow = new DataWindow() { IsOpen = false };
+-        this.gamepadModeNotifierWindow = new GamepadModeNotifierWindow() { IsOpen = false };
++        this.colorDemoWindow = new ColorDemoWindow { IsOpen = false };
++        this.componentDemoWindow = new ComponentDemoWindow { IsOpen = false };
++        this.dataWindow = new DataWindow(this.WindowSystem) { IsOpen = false };
++        this.gamepadModeNotifier = new GamepadModeNotifier(fontAtlasFactory);
+         this.consoleWindow = new ConsoleWindow(configuration) { IsOpen = configuration.LogOpenAtStartup };
+-        this.pluginStatWindow = new PluginStatWindow() { IsOpen = false };
++        this.pluginStatWindow = new PluginStatWindow { IsOpen = false };
+         this.pluginWindow = new PluginInstallerWindow(pluginImageCache, configuration) { IsOpen = false };
+-        this.settingsWindow = new SettingsWindow() { IsOpen = false };
++        this.settingsWindow = new SettingsWindow { IsOpen = false };
+         this.selfTestWindow = new SelfTestWindow(selfTestRegistry) { IsOpen = false };
+-        this.styleEditorWindow = new StyleEditorWindow() { IsOpen = false };
++        this.styleEditorWindow = new StyleEditorWindow { IsOpen = false };
+         this.titleScreenMenuWindow = new TitleScreenMenuWindow(
+             clientState,
+             configuration,
+@@ -159,15 +160,14 @@
+         {
+             IsOpen = false,
+         };
+-        this.profilerWindow = new ProfilerWindow() { IsOpen = false };
+-        this.branchSwitcherWindow = new BranchSwitcherWindow() { IsOpen = false };
+-        this.hitchSettingsWindow = new HitchSettingsWindow() { IsOpen = false };
++        this.profilerWindow = new ProfilerWindow { IsOpen = false };
++        this.branchSwitcherWindow = new BranchSwitcherWindow { IsOpen = false };
++        this.hitchSettingsWindow = new HitchSettingsWindow { IsOpen = false };
+ 
+         this.WindowSystem.AddWindow(this.changelogWindow);
+         this.WindowSystem.AddWindow(this.colorDemoWindow);
+         this.WindowSystem.AddWindow(this.componentDemoWindow);
+         this.WindowSystem.AddWindow(this.dataWindow);
+-        this.WindowSystem.AddWindow(this.gamepadModeNotifierWindow);
+         this.WindowSystem.AddWindow(this.consoleWindow);
+         this.WindowSystem.AddWindow(this.pluginStatWindow);
+         this.WindowSystem.AddWindow(this.pluginWindow);
+@@ -280,6 +280,7 @@
+ 
+         this.changelogWindow.Dispose();
+         this.consoleWindow.Dispose();
++        this.gamepadModeNotifier.Dispose();
+         this.pluginWindow.Dispose();
+         this.titleScreenMenuWindow.Dispose();
+     }
+@@ -320,11 +321,6 @@
+     public void OpenDevMenu() => this.isImGuiDrawDevMenu = true;
+ 
+     /// <summary>
+-    /// Opens the <see cref="GamepadModeNotifierWindow"/>.
+-    /// </summary>
+-    public void OpenGamepadModeNotifierWindow() => this.gamepadModeNotifierWindow.IsOpen = true;
+-
+-    /// <summary>
+     /// Opens the <see cref="ConsoleWindow"/>.
+     /// </summary>
+     /// <param name="textFilter">The filter to set, if not null.</param>
+@@ -430,15 +426,6 @@
+         this.branchSwitcherWindow.IsOpen = true;
+         this.branchSwitcherWindow.BringToFront();
+     }
+-
+-    #endregion
+-
+-    #region Close
+-
+-    /// <summary>
+-    /// Closes the <see cref="GamepadModeNotifierWindow"/>.
+-    /// </summary>
+-    public void CloseGamepadModeNotifierWindow() => this.gamepadModeNotifierWindow.IsOpen = false;
+ 
+     #endregion
+ 
+@@ -476,11 +463,6 @@
+     /// Toggles the dev menu bar.
+     /// </summary>
+     public void ToggleDevMenu() => this.isImGuiDrawDevMenu ^= true;
+-
+-    /// <summary>
+-    /// Toggles the <see cref="GamepadModeNotifierWindow"/>.
+-    /// </summary>
+-    public void ToggleGamepadModeNotifierWindow() => this.gamepadModeNotifierWindow.Toggle();
+ 
+     /// <summary>
+     /// Toggles the <see cref="ConsoleWindow"/>.
+@@ -597,6 +579,8 @@
+                 });
+             }
+ #endif
++
++        this.DrawGamepadNotifier();
+ 
+         if (!this.hasDrawError && !this.isDrawSuppressed)
+         {
+@@ -639,6 +623,28 @@
+ 
+         if (this.hasDrawError)
+             this.DrawInternalErrorWindow();
++    }
++
++    /// <summary>
++    /// Draws the gamepad mode notifier while inputs are caught.
++    /// </summary>
++    private void DrawGamepadNotifier()
++    {
++        var gamepadState = Service<GamepadState>.GetNullable();
++        if (gamepadState?.EnableGamepadNav != true)
++        {
++            return;
++        }
++
++        try
++        {
++            this.gamepadModeNotifier.Draw();
++        }
++        catch (Exception ex)
++        {
++            Log.Error(ex, "Error drawing gamepad mode notifier, disabling gamepad mode");
++            gamepadState.EnableGamepadNav = false;
++        }
+     }
+ 
+     private void DrawInternalErrorWindow()
+diff --git a/Dalamud/Interface/Internal/GamepadAutoExit.cs b/Dalamud/Interface/Internal/GamepadAutoExit.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/GamepadAutoExit.cs
+@@ -0,0 +1,96 @@
++using Dalamud.Bindings.ImGui;
++
++namespace Dalamud.Interface.Internal;
++
++/// <summary>
++/// Detects the last actual ImGui window closing, so that we can turn off gamepad nav.
++/// </summary>
++internal class GamepadAutoExit
++{
++    private const long DebounceMs = 250;
++
++    private const ImGuiWindowFlags ExcludedFlags =
++        ImGuiWindowFlags.NoNavFocus | ImGuiWindowFlags.Tooltip | ImGuiWindowFlags.ChildMenu;
++
++    private bool hadWindow;
++    private long? emptySince;
++
++    /// <summary>
++    /// Reset internal tracking state.
++    /// </summary>
++    public void Reset()
++    {
++        this.hadWindow = false;
++        this.emptySince = null;
++    }
++
++    /// <summary>
++    /// Gets whether the last navigable window has closed.
++    /// </summary>
++    /// <returns>True when gamepad mode should be disabled.</returns>
++    public bool ShouldExit()
++    {
++        if (UiHideState.AnyActive)
++        {
++            this.Reset();
++            return false;
++        }
++
++        if (HasNavWindow())
++        {
++            this.hadWindow = true;
++            this.emptySince = null;
++            return false;
++        }
++
++        if (!this.hadWindow)
++        {
++            return false;
++        }
++
++        var now = Environment.TickCount64;
++        this.emptySince ??= now;
++        if (now - this.emptySince < DebounceMs)
++        {
++            return false;
++        }
++
++        this.Reset();
++        return true;
++    }
++
++    private static bool HasNavWindow()
++    {
++        var windows = ImGui.GetCurrentContext().Windows;
++        for (var i = 0; i < windows.Size; i++)
++        {
++            if (IsNavWindow(windows[i]))
++            {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    private static bool IsNavWindow(ImGuiWindowPtr window)
++    {
++        if (!window.Active || window.IsFallbackWindow || window.RootWindow != window)
++        {
++            return false;
++        }
++
++        var flags = window.Flags;
++        if ((flags & ExcludedFlags) != 0)
++        {
++            return false;
++        }
++
++        if ((flags & ImGuiWindowFlags.Popup) != 0 && (flags & ImGuiWindowFlags.Modal) == 0)
++        {
++            return false;
++        }
++
++        return (flags & ImGuiWindowFlags.NoTitleBar) == 0 || window.DockIsActive;
++    }
++}
+diff --git a/Dalamud/Interface/Internal/GamepadModeNotifier.cs b/Dalamud/Interface/Internal/GamepadModeNotifier.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/GamepadModeNotifier.cs
+@@ -0,0 +1,128 @@
++using System.Numerics;
++
++using CheapLoc;
++
++using Dalamud.Bindings.ImGui;
++using Dalamud.Game.Text.SeStringHandling;
++using Dalamud.Interface.ImGuiSeStringRenderer;
++using Dalamud.Interface.ImGuiSeStringRenderer.Internal;
++using Dalamud.Interface.ManagedFontAtlas;
++using Dalamud.Interface.ManagedFontAtlas.Internals;
++using Dalamud.Interface.Utility;
++using Dalamud.Utility;
++
++namespace Dalamud.Interface.Internal;
++
++/// <summary>
++/// Class responsible for drawing a notifier on screen that gamepad mode is active.
++/// </summary>
++internal class GamepadModeNotifier : IDisposable
++{
++    private const float TitleFontSizePt = 36f;
++    private const float TitleFontSizePx = TitleFontSizePt * 4 / 3;
++
++    private const uint DimColor = 0x661A1A1A;
++    private const uint TextColor = 0xFFFFFFFF;
++
++    private const float TopMargin = 60f;
++    private const float GlowSpeed = 3f;
++    private const float GlowMaxAlpha = 0.35f;
++    private const float GlowRingWidth = 1.5f;
++    private const int GlowRings = 3;
++    private const int GlowSteps = 12;
++
++    private static readonly Vector4 GlowColor = new(0.35f, 0.75f, 1f, 1f);
++
++    private readonly DisposeSafety.ScopedFinalizer scopedFinalizer = new();
++    private readonly IFontHandle titleFont;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="GamepadModeNotifier"/> class.
++    /// </summary>
++    /// <param name="fontAtlasFactory">Font factory.</param>
++    public GamepadModeNotifier(FontAtlasFactory fontAtlasFactory)
++    {
++        var atlas = this.scopedFinalizer.Add(
++            fontAtlasFactory.CreateFontAtlas(nameof(GamepadModeNotifier), FontAtlasAutoRebuildMode.Async));
++        this.titleFont = this.scopedFinalizer.Add(
++            atlas.NewDelegateFontHandle(e => e.OnPreBuild(tk => tk.AddDalamudDefaultFont(TitleFontSizePx))));
++    }
++
++    /// <inheritdoc/>
++    public void Dispose() => this.scopedFinalizer.Dispose();
++
++    /// <summary>
++    /// Draws a light grey-ish, main-viewport-big filled rect in the background draw list alongside a text indicating gamepad mode.
++    /// </summary>
++    public void Draw()
++    {
++        var viewport = ImGuiHelpers.MainViewport;
++        var drawList = ImGui.GetBackgroundDrawList(viewport);
++        var viewportMax = viewport.Pos + viewport.Size;
++
++        drawList.PushClipRect(viewport.Pos, viewportMax);
++        drawList.AddRectFilled(viewport.Pos, viewportMax, DimColor);
++
++        var centerX = viewport.WorkPos.X + (viewport.WorkSize.X / 2);
++        var y = viewport.WorkPos.Y + (TopMargin * ImGuiHelpers.GlobalScale);
++
++        using (this.titleFont.Push())
++        {
++            var title = Loc.Localize("DalamudGamepadModeNotifierTitle", "Gamepad Mode On");
++            var titlePos = new Vector2(centerX - (ImGui.CalcTextSize(title).X / 2), y);
++            DrawGlow(drawList, titlePos, title);
++            drawList.AddText(titlePos, TextColor, title);
++            y += ImGui.GetTextLineHeightWithSpacing();
++        }
++
++        string IconMacro(BitmapFontIcon icon) => $"<icon({(int)icon})>";
++
++        var description = string.Format(
++            Loc.Localize(
++                "DalamudGamepadModeNotifierText",
++                "Dalamud is sending gamepad inputs to plugin windows.\nPress {0}+{1} to deactivate or press {2} to toggle the plugin installer.\nHold {3} to select windows."),
++            IconMacro(BitmapFontIcon.ControllerShoulderLeft),
++            IconMacro(BitmapFontIcon.ControllerAnalogLeftStickIn),
++            IconMacro(BitmapFontIcon.ControllerAnalogRightStickIn),
++            IconMacro(BitmapFontIcon.ControllerButton2));
++
++        var renderer = Service<SeStringRenderer>.Get();
++        var lineParams = new SeStringDrawParams
++        {
++            TargetDrawList = drawList,
++            WrapWidth = viewport.WorkSize.X,
++            Font = ImGui.GetFont(),
++            FontSize = ImGui.GetFontSize(),
++            Color = TextColor,
++        };
++
++        foreach (var line in description.Split('\n'))
++        {
++            var size = ImGuiHelpers.CenteredSeString(
++                renderer.CompileAndCache(line).AsSpan(),
++                lineParams with { ScreenOffset = viewport.WorkPos with { Y = y } }).Size;
++            y += size.Y + ImGui.GetStyle().ItemSpacing.Y;
++        }
++
++        drawList.PopClipRect();
++    }
++
++    private static void DrawGlow(ImDrawListPtr drawList, Vector2 pos, string text)
++    {
++        var pulse = (MathF.Sin((float)ImGui.GetTime() * GlowSpeed) + 1) / 2;
++
++        for (var ring = 1; ring <= GlowRings; ring++)
++        {
++            var alpha = pulse * GlowMaxAlpha / ring;
++            var color = ImGui.ColorConvertFloat4ToU32(GlowColor with { W = alpha });
++            var radius = ring * GlowRingWidth * ImGuiHelpers.GlobalScale;
++
++            for (var step = 0; step < GlowSteps; step++)
++            {
++                var angle = MathF.Tau * step / GlowSteps;
++                var offset = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * radius;
++                drawList.AddText(pos + offset, color, text);
++            }
++        }
++    }
++}
+diff --git a/Dalamud/Interface/Internal/InterfaceManager.cs b/Dalamud/Interface/Internal/InterfaceManager.cs
+--- a/Dalamud/Interface/Internal/InterfaceManager.cs
++++ b/Dalamud/Interface/Internal/InterfaceManager.cs
+@@ -106,6 +106,7 @@
+     private readonly ConcurrentQueue<Action> runAfterImGuiRender = new();
+ 
+     private readonly AssertHandler assertHandler = new();
++    private readonly GamepadAutoExit gamepadAutoExit = new();
+ 
+     private IWin32Backend? backend;
+ 
+@@ -324,7 +325,7 @@
+         // Framework.Destroy has never been called and thus Framework.IsFrameworkUnloading cannot be true, and this
+         // function will actually run the destroy from the framework thread.
+         // Otherwise, as Framework.IsFrameworkUnloading should have been set, this code should run immediately.
+-        this.framework.RunOnFrameworkThread(ClearHooks).Wait();
++        this.framework.RunOnFrameworkThread(this.ClearHooks).Wait();
+ 
+         // Below this point, hooks are guaranteed to be no longer called.
+ 
+@@ -346,19 +347,6 @@
+ 
+         Interlocked.Exchange(ref this.dalamudAtlas, null)?.Dispose();
+         Interlocked.Exchange(ref this.backend, null)?.Dispose();
+-
+-        return;
+-
+-        void ClearHooks()
+-        {
+-            this.wndProcHookManager.PreWndProc -= this.WndProcHookManagerOnPreWndProc;
+-            Interlocked.Exchange(ref this.setCursorHook, null)?.Dispose();
+-            Interlocked.Exchange(ref this.dxgiSwapChainPresentHook, null)?.Dispose();
+-            Interlocked.Exchange(ref this.reShadeDxgiSwapChainPresentHook, null)?.Dispose();
+-            Interlocked.Exchange(ref this.dxgiSwapChainResizeBuffersHook, null)?.Dispose();
+-            Interlocked.Exchange(ref this.dxgiSwapChainHook, null)?.Dispose();
+-            Interlocked.Exchange(ref this.reShadeAddonInterface, null)?.Dispose();
+-        }
+     }
+ 
+     /// <summary>
+@@ -612,7 +600,32 @@
+             return;
+ 
+         this.framework.Update -= this.FrameworkOnUpdate;
+-        this.SetupHooks(Service<TargetSigScanner>.Get(), Service<FontAtlasFactory>.Get());
++
++        try
++        {
++            this.SetupHooks(Service<FontAtlasFactory>.Get());
++        }
++        catch (Exception ex)
++        {
++            Log.Error(ex, "Could not set up interface hooks");
++
++            // Fail init immediately and let service init deal with it
++            Service<InterfaceManagerWithScene>.ProvideException(ex);
++
++            // Make sure we don't get any calls from hooks, since we might have been setup half way
++            this.ClearHooks();
++        }
++    }
++
++    private void ClearHooks()
++    {
++        this.wndProcHookManager.PreWndProc -= this.WndProcHookManagerOnPreWndProc;
++        Interlocked.Exchange(ref this.setCursorHook, null)?.Dispose();
++        Interlocked.Exchange(ref this.dxgiSwapChainPresentHook, null)?.Dispose();
++        Interlocked.Exchange(ref this.reShadeDxgiSwapChainPresentHook, null)?.Dispose();
++        Interlocked.Exchange(ref this.dxgiSwapChainResizeBuffersHook, null)?.Dispose();
++        Interlocked.Exchange(ref this.dxgiSwapChainHook, null)?.Dispose();
++        Interlocked.Exchange(ref this.reShadeAddonInterface, null)?.Dispose();
+     }
+ 
+     /// <summary>Checks if the provided swap chain is the target that Dalamud should draw its interface onto,
+@@ -845,7 +858,6 @@
+     }
+ 
+     private unsafe void SetupHooks(
+-        TargetSigScanner sigScanner,
+         FontAtlasFactory fontAtlasFactory)
+     {
+         this.dalamudAtlas = fontAtlasFactory
+@@ -1033,13 +1045,6 @@
+                 }
+ 
+                 Log.Information("Registered as a ReShade addon");
+-                this.reShadeAddonInterface.InitSwapChain += this.ReShadeAddonInterfaceOnInitSwapChain;
+-                this.reShadeAddonInterface.DestroySwapChain += this.ReShadeAddonInterfaceOnDestroySwapChain;
+-                if (this.dalamudConfiguration.ReShadeHandlingMode == ReShadeHandlingMode.ReShadeAddonPresent)
+-                    this.reShadeAddonInterface.Present += this.ReShadeAddonInterfaceOnPresent;
+-                else
+-                    this.reShadeAddonInterface.ReShadeOverlay += this.ReShadeAddonInterfaceOnReShadeOverlay;
+-
+                 dxgiSwapChainResizeBuffersDelegate = this.AsReShadeAddonDxgiSwapChainResizeBuffersDetour;
+                 break;
+ 
+@@ -1132,6 +1137,23 @@
+         this.dxgiSwapChainResizeBuffersHook.Enable();
+         this.dxgiSwapChainPresentHook?.Enable();
+         this.dxgiSwapChainHook?.Enable();
++
++        // Set up ReShade callbacks after we are sure we are set
++        if (this.reShadeAddonInterface is null)
++        {
++            return;
++        }
++
++        this.reShadeAddonInterface.InitSwapChain += this.ReShadeAddonInterfaceOnInitSwapChain;
++        this.reShadeAddonInterface.DestroySwapChain += this.ReShadeAddonInterfaceOnDestroySwapChain;
++        if (this.dalamudConfiguration.ReShadeHandlingMode == ReShadeHandlingMode.ReShadeAddonPresent)
++        {
++            this.reShadeAddonInterface.Present += this.ReShadeAddonInterfaceOnPresent;
++        }
++        else
++        {
++            this.reShadeAddonInterface.ReShadeOverlay += this.ReShadeAddonInterfaceOnReShadeOverlay;
++        }
+     }
+ 
+     private nint SetCursorDetour(nint hCursor)
+@@ -1170,6 +1192,9 @@
+ 
+         var gamepadEnabled = (io.BackendFlags & ImGuiBackendFlags.HasGamepad) > 0;
+ 
++        // Plugins can enable/disable this in io state without us noticing or showing the notifier
++        gamepadState.EnableGamepadNav = (io.ConfigFlags & ImGuiConfigFlags.NavEnableGamepad) > 0;
++
+         // NOTE (Chiv) Activate ImGui navigation  via L1+L3 press
+         // (mimicking how mouse navigation is activated via L1+R3 press in game).
+         if (gamepadEnabled
+@@ -1177,6 +1202,15 @@
+             && gamepadState.Pressed(GamepadButtons.L3) > 0)
+         {
+             gamepadState.EnableGamepadNav ^= true;
++        }
++
++        if (!gamepadState.EnableGamepadNav || !this.dalamudConfiguration.AutoExitGamepadNavigation)
++        {
++            this.gamepadAutoExit.Reset();
++        }
++        else if (this.gamepadAutoExit.ShouldExit())
++        {
++            gamepadState.EnableGamepadNav = false;
+         }
+ 
+         if (gamepadEnabled && (io.ConfigFlags & ImGuiConfigFlags.NavEnableGamepad) > 0)
+diff --git a/Dalamud/Interface/Internal/UiHideState.cs b/Dalamud/Interface/Internal/UiHideState.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/UiHideState.cs
+@@ -0,0 +1,44 @@
++using Dalamud.Game.ClientState;
++using Dalamud.Game.ClientState.Conditions;
++using Dalamud.Game.Gui;
++
++namespace Dalamud.Interface.Internal;
++
++/// <summary>
++/// Game states in which plugin UI may be hidden automatically (doesn't do any hiding, just collects logic).
++/// </summary>
++internal static class UiHideState
++{
++    /// <summary>
++    /// Gets a value indicating whether the user toggled the game UI off.
++    /// </summary>
++    public static bool GameUiHidden => Service<GameGui>.GetNullable()?.GameUiHidden == true;
++
++    /// <summary>
++    /// Gets a value indicating whether GPose is active.
++    /// </summary>
++    public static bool GPosing => Service<ClientState>.GetNullable()?.IsGPosing == true;
++
++    /// <summary>
++    /// Gets a value indicating whether a cutscene is playing.
++    /// </summary>
++    public static bool CutsceneActive
++    {
++        get
++        {
++            var condition = Service<Condition>.GetNullable();
++            if (condition == null)
++            {
++                return false;
++            }
++
++            return condition[ConditionFlag.OccupiedInCutSceneEvent]
++                   || condition[ConditionFlag.WatchingCutscene78];
++        }
++    }
++
++    /// <summary>
++    /// Gets a value indicating whether any of the states is active.
++    /// </summary>
++    public static bool AnyActive => GameUiHidden || GPosing || CutsceneActive;
++}
+diff --git a/Dalamud/Interface/Internal/Windows/Data/DataWindow.cs b/Dalamud/Interface/Internal/Windows/Data/DataWindow.cs
+--- a/Dalamud/Interface/Internal/Windows/Data/DataWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/Data/DataWindow.cs
+@@ -1,3 +1,4 @@
++using System.Collections.Generic;
+ using System.Linq;
+ using System.Numerics;
+ 
+@@ -6,6 +7,7 @@
+ using Dalamud.Interface.Components;
+ using Dalamud.Interface.Internal.Windows.Data.Widgets;
+ using Dalamud.Interface.Utility;
++using Dalamud.Interface.Utility.Raii;
+ using Dalamud.Interface.Windowing;
+ using Dalamud.Utility;
+ 
+@@ -18,6 +20,8 @@
+ /// </summary>
+ internal class DataWindow : Window, IDisposable
+ {
++    private readonly WindowSystem windowSystem;
++
+     private readonly IDataWindowWidget[] modules =
+     [
+         new AddonInspectorWidget(),
+@@ -33,6 +37,7 @@
+         new ConfigurationWidget(),
+         new DataShareWidget(),
+         new DtrBarWidget(),
++        new ExceptionWidget(),
+         new FateTableWidget(),
+         new FlyTextWidget(),
+         new FontAwesomeTestWidget(),
+@@ -67,6 +72,7 @@
+     ];
+ 
+     private readonly IOrderedEnumerable<IDataWindowWidget> orderedModules;
++    private readonly List<WidgetPopOutWindow> popOutWindows = [];
+ 
+     private bool isExcept;
+     private bool selectionCollapsed;
+@@ -76,9 +82,11 @@
+     /// <summary>
+     /// Initializes a new instance of the <see cref="DataWindow"/> class.
+     /// </summary>
+-    public DataWindow()
++    /// <param name="windowSystem">Reference to dalamud's window system.</param>
++    public DataWindow(WindowSystem windowSystem)
+         : base("Dalamud Data", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+     {
++        this.windowSystem = windowSystem;
+         this.Size = new Vector2(400, 300);
+         this.SizeCondition = ImGuiCond.FirstUseEver;
+ 
+@@ -91,7 +99,15 @@
+     public IDataWindowWidget CurrentWidget { get; set; }
+ 
+     /// <inheritdoc/>
+-    public void Dispose() => this.modules.OfType<IDisposable>().AggregateToDisposable().Dispose();
++    public void Dispose()
++    {
++        foreach (var window in this.popOutWindows)
++        {
++            window.IsOpen = false;
++        }
++
++        this.modules.OfType<IDisposable>().AggregateToDisposable().Dispose();
++    }
+ 
+     /// <inheritdoc/>
+     public override void OnOpen()
+@@ -112,7 +128,9 @@
+         foreach (var m in this.modules)
+         {
+             if (m is T w)
++            {
+                 return w;
++            }
+         }
+ 
+         throw new ArgumentException($"No widget of type {typeof(T).FullName} found.");
+@@ -125,7 +143,9 @@
+     public void SetDataKind(string dataKind)
+     {
+         if (string.IsNullOrEmpty(dataKind))
+-            return;
++        {
++            return;
++        }
+ 
+         if (this.modules.FirstOrDefault(module => module.IsWidgetCommand(dataKind)) is { } targetModule)
+         {
+@@ -149,116 +169,144 @@
+             return;
+         }
+ 
+-        if (ImGui.BeginTable("XlData_Table"u8, 2, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.Resizable))
+-        {
+-            ImGui.TableSetupColumn("##SelectionColumn"u8, ImGuiTableColumnFlags.WidthFixed, 200.0f * ImGuiHelpers.GlobalScale);
+-            ImGui.TableSetupColumn("##ContentsColumn"u8, ImGuiTableColumnFlags.WidthStretch);
+-
+-            ImGui.TableNextColumn();
+-            this.DrawSelection();
+-
+-            ImGui.TableNextColumn();
+-            this.DrawContents();
+-
+-            ImGui.EndTable();
+-        }
++        using var table = ImRaii.Table("XlData_Table"u8, 2, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.Resizable);
++        if (!table)
++        {
++            return;
++        }
++
++        ImGui.TableSetupColumn("##SelectionColumn"u8, ImGuiTableColumnFlags.WidthFixed, 200.0f * ImGuiHelpers.GlobalScale);
++        ImGui.TableSetupColumn("##ContentsColumn"u8, ImGuiTableColumnFlags.WidthStretch);
++
++        ImGui.TableNextColumn();
++        this.DrawSelection();
++
++        ImGui.TableNextColumn();
++        this.DrawContents();
+     }
+ 
+     private void DrawSelection()
+     {
+-        if (ImGui.BeginChild("XlData_SelectionPane"u8, ImGui.GetContentRegionAvail()))
+-        {
+-            if (ImGui.BeginListBox("WidgetSelectionListbox"u8, ImGui.GetContentRegionAvail()))
+-            {
+-                foreach (var widget in this.orderedModules)
++        using var child = ImRaii.Child("XlData_SelectionPane"u8, ImGui.GetContentRegionAvail());
++        if (!child)
++        {
++            return;
++        }
++
++        using var listBox = ImRaii.ListBox("WidgetSelectionListbox"u8, ImGui.GetContentRegionAvail());
++        if (!listBox)
++        {
++            return;
++        }
++
++        foreach (var widget in this.orderedModules)
++        {
++            if (ImGui.Selectable(widget.DisplayName, this.CurrentWidget == widget))
++            {
++                this.CurrentWidget = widget;
++            }
++        }
++    }
++
++    private void DrawContents()
++    {
++        using var frameChild = ImRaii.Child("XlData_ContentsPane"u8, ImGui.GetContentRegionAvail());
++        if (!frameChild)
++        {
++            return;
++        }
++
++        if (ImGuiComponents.IconButton("collapse-expand", this.selectionCollapsed ? FontAwesomeIcon.ArrowRight : FontAwesomeIcon.ArrowLeft))
++        {
++            this.selectionCollapsed = !this.selectionCollapsed;
++        }
++
++        if (ImGui.IsItemHovered())
++        {
++            ImGui.SetTooltip($"{(this.selectionCollapsed ? "Expand" : "Collapse")} selection pane");
++        }
++
++        ImGui.SameLine();
++
++        if (ImGuiComponents.IconButton("forceReload", FontAwesomeIcon.Sync))
++        {
++            this.isLoaded = false;
++            this.Load();
++        }
++
++        if (ImGui.IsItemHovered())
++        {
++            ImGui.SetTooltip("Force Reload"u8);
++        }
++
++        ImGui.SameLine();
++
++        var copy = ImGuiComponents.IconButton("copyAll", FontAwesomeIcon.ClipboardList);
++
++        ImGui.SameLine();
++
++        if (ImGuiComponents.IconButton("popout", FontAwesomeIcon.ArrowUpRightFromSquare))
++        {
++            if (this.popOutWindows.All(window => window.Widget != this.CurrentWidget))
++            {
++                // Create window, window will add itself to the window system, and when closed will remove itself from this list.
++                this.popOutWindows.Add(new WidgetPopOutWindow(this.windowSystem, this.CurrentWidget)
+                 {
+-                    if (ImGui.Selectable(widget.DisplayName, this.CurrentWidget == widget))
+-                    {
+-                        this.CurrentWidget = widget;
+-                    }
+-                }
+-
+-                ImGui.EndListBox();
+-            }
+-        }
+-
+-        ImGui.EndChild();
+-    }
+-
+-    private void DrawContents()
+-    {
+-        if (ImGui.BeginChild("XlData_ContentsPane"u8, ImGui.GetContentRegionAvail()))
+-        {
+-            if (ImGuiComponents.IconButton("collapse-expand", this.selectionCollapsed ? FontAwesomeIcon.ArrowRight : FontAwesomeIcon.ArrowLeft))
+-            {
+-                this.selectionCollapsed = !this.selectionCollapsed;
+-            }
+-
+-            if (ImGui.IsItemHovered())
+-            {
+-                ImGui.SetTooltip($"{(this.selectionCollapsed ? "Expand" : "Collapse")} selection pane");
+-            }
+-
+-            ImGui.SameLine();
+-
+-            if (ImGuiComponents.IconButton("forceReload", FontAwesomeIcon.Sync))
+-            {
+-                this.isLoaded = false;
+-                this.Load();
+-            }
+-
+-            if (ImGui.IsItemHovered())
+-            {
+-                ImGui.SetTooltip("Force Reload"u8);
+-            }
+-
+-            ImGui.SameLine();
+-
+-            var copy = ImGuiComponents.IconButton("copyAll", FontAwesomeIcon.ClipboardList);
+-
+-            ImGuiHelpers.ScaledDummy(10.0f);
+-
+-            if (ImGui.BeginChild("XlData_WidgetContents"u8, ImGui.GetContentRegionAvail()))
+-            {
+-                if (copy)
+-                    ImGui.LogToClipboard();
+-
+-                try
+-                {
+-                    if (this.CurrentWidget is { Ready: true })
+-                    {
+-                        this.CurrentWidget.Draw();
+-                    }
+-                    else
+-                    {
+-                        ImGui.Text("Data not ready."u8);
+-                    }
+-
+-                    this.isExcept = false;
+-                }
+-                catch (Exception ex)
+-                {
+-                    if (!this.isExcept)
+-                    {
+-                        Log.Error(ex, "Could not draw data");
+-                    }
+-
+-                    this.isExcept = true;
+-
+-                    ImGui.Text(ex.ToString());
+-                }
+-            }
+-
+-            ImGui.EndChild();
+-        }
+-
+-        ImGui.EndChild();
++                    OnCloseAction = thisWindow => this.popOutWindows.Remove(thisWindow),
++                });
++            }
++        }
++
++        if (ImGui.IsItemHovered())
++        {
++            ImGui.SetTooltip("Pop out into new window"u8);
++        }
++
++        ImGuiHelpers.ScaledDummy(10.0f);
++
++        using var contentsChild = ImRaii.Child("XlData_WidgetContents"u8, ImGui.GetContentRegionAvail());
++        if (!contentsChild)
++        {
++            return;
++        }
++
++        if (copy)
++        {
++            ImGui.LogToClipboard();
++        }
++
++        try
++        {
++            if (this.CurrentWidget is { Ready: true })
++            {
++                this.CurrentWidget.Draw();
++            }
++            else
++            {
++                ImGui.Text("Data not ready."u8);
++            }
++
++            this.isExcept = false;
++        }
++        catch (Exception ex)
++        {
++            if (!this.isExcept)
++            {
++                Log.Error(ex, "Could not draw data");
++            }
++
++            this.isExcept = true;
++
++            ImGui.Text(ex.ToString());
++        }
+     }
+ 
+     private void Load()
+     {
+         if (this.isLoaded)
+-            return;
++        {
++            return;
++        }
+ 
+         this.isLoaded = true;
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Data/WidgetPopOutWindow.cs b/Dalamud/Interface/Internal/Windows/Data/WidgetPopOutWindow.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/Windows/Data/WidgetPopOutWindow.cs
+@@ -0,0 +1,58 @@
++using System.Numerics;
++
++using Dalamud.Bindings.ImGui;
++using Dalamud.Interface.Windowing;
++
++namespace Dalamud.Interface.Internal.Windows.Data;
++
++/// <summary>
++/// General purpose window for use with <see cref="DataWindow"/> to display <see cref="IDataWindowWidget"/>
++/// widgets in their own popup windows that are not dependent on the <see cref="DataWindow"/> being open.
++/// </summary>
++internal class WidgetPopOutWindow : Window
++{
++    private readonly WindowSystem windowSystem;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="WidgetPopOutWindow"/> class.
++    /// </summary>
++    /// <param name="windowSystem">Reference to window system.</param>
++    /// <param name="widget">Reference to widget to display.</param>
++    public WidgetPopOutWindow(WindowSystem windowSystem, IDataWindowWidget widget)
++        : base($"{widget.DisplayName}##DataWindowPopOutWidget")
++    {
++        this.Size = new Vector2(400.0f, 300.0f);
++        this.SizeCondition = ImGuiCond.FirstUseEver;
++
++        this.windowSystem = windowSystem;
++        this.Widget = widget;
++
++        this.windowSystem.AddWindow(this);
++        this.IsOpen = true;
++    }
++
++    /// <summary>
++    /// Gets the widget that this window is drawing.
++    /// </summary>
++    public IDataWindowWidget Widget { get; init; }
++
++    /// <summary>
++    /// Gets or sets an action that is invoked when the window closes.
++    /// </summary>
++    public Action<WidgetPopOutWindow>? OnCloseAction { get; set; }
++
++    /// <inheritdoc/>
++    public override void Draw()
++    {
++        this.Widget.Draw();
++    }
++
++    /// <inheritdoc/>
++    public override void OnClose()
++    {
++        base.OnClose();
++        this.windowSystem.RemoveWindow(this);
++
++        this.OnCloseAction?.Invoke(this);
++    }
++}
+diff --git a/Dalamud/Interface/Internal/Windows/Data/Widgets/ExceptionWidget.cs b/Dalamud/Interface/Internal/Windows/Data/Widgets/ExceptionWidget.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/Windows/Data/Widgets/ExceptionWidget.cs
+@@ -0,0 +1,188 @@
++using System.Drawing;
++using System.Linq;
++using System.Numerics;
++
++using CheapLoc;
++
++using Dalamud.Bindings.ImGui;
++using Dalamud.Interface.Colors;
++using Dalamud.Interface.Utility;
++using Dalamud.Interface.Utility.Raii;
++using Dalamud.Logging;
++using Dalamud.Plugin.Internal.Types;
++
++namespace Dalamud.Interface.Internal.Windows.Data.Widgets;
++
++/// <summary>
++/// Data widget for easier browsing of plugin exceptions.
++/// </summary>
++public class ExceptionWidget : IDataWindowWidget
++{
++    private LocalPlugin? selectedPlugin;
++    private PluginExceptionEntry? selectedException;
++
++    /// <inheritdoc/>
++    public string[]? CommandShortcuts { get; init; } = ["exception", "ex", "error"];
++
++    /// <inheritdoc/>
++    public string DisplayName { get; init; } = Loc.Localize("MoonwakeExceptionBrowser", "Exception Browser");
++
++    /// <inheritdoc/>
++    public bool Ready { get; set; }
++
++    /// <inheritdoc/>
++    public void Load()
++    {
++        this.Ready = true;
++    }
++
++    /// <inheritdoc/>
++    public void Draw()
++    {
++        if (this.selectedPlugin is { IsLoaded: false })
++        {
++            this.selectedPlugin = null;
++            this.selectedException = null;
++        }
++
++        this.DrawPluginSelectCombo();
++
++        if (this.selectedPlugin is null)
++        {
++            using (ImRaii.PushColor(ImGuiCol.Text, KnownColor.Orange.Vector()))
++            {
++                ImGuiHelpers.CenteredText(Loc.Localize("MoonwakeExceptionSelectPlugin", "Select a plugin above"));
++            }
++
++            return;
++        }
++
++        this.DrawLimitNotice(this.selectedPlugin);
++
++        using var table = ImRaii.Table("##SectionTable", 2, ImGuiTableFlags.Resizable, outerSize: ImGui.GetContentRegionAvail());
++        if (!table) return;
++
++        ImGui.TableSetupColumn("##ListBoxColumn", ImGuiTableColumnFlags.WidthStretch, 3);
++        ImGui.TableSetupColumn("##ExceptionColumn", ImGuiTableColumnFlags.WidthStretch, 11);
++
++        ImGui.TableNextColumn();
++        this.DrawExceptionSelectList();
++
++        ImGui.TableNextColumn();
++        this.DrawExceptionInformation();
++    }
++
++    private void DrawPluginSelectCombo()
++    {
++        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
++        using var combo = ImRaii.Combo("##PluginSelectCombo", this.selectedPlugin?.Name ?? Loc.Localize("MoonwakeExceptionNoPlugin", "No plugin selected"), ImGuiComboFlags.HeightLargest);
++        if (!combo) return;
++
++        var options = ScopedPluginLogService.PluginExceptionEntries.Keys;
++
++        if (options.Count is 0)
++        {
++            ImGui.Text(Loc.Localize("MoonwakeExceptionEmpty", "No plugins have logged exceptions."));
++            return;
++        }
++
++        foreach (var option in ScopedPluginLogService.PluginExceptionEntries.Keys)
++        {
++            if (ImGui.Selectable(option.Name, this.selectedPlugin == option))
++            {
++                this.selectedPlugin = option;
++            }
++        }
++    }
++
++    private void DrawLimitNotice(LocalPlugin plugin)
++    {
++        if (!ScopedPluginLogService.PluginExceptionEntries.TryGetValue(plugin, out var exceptions))
++        {
++            return;
++        }
++
++        if (exceptions.Count < ScopedPluginLogService.MaxPluginExceptionEntries)
++        {
++            return;
++        }
++
++        ImGui.AlignTextToFramePadding();
++        ImGui.TextColored(ImGuiColors.WarningForeground, string.Format(Loc.Localize("MoonwakeExceptionLimit", "The limit of {0} exceptions has been reached."), ScopedPluginLogService.MaxPluginExceptionEntries));
++
++        ImGui.SameLine();
++        if (ImGui.Button(Loc.Localize("MoonwakeExceptionClear", "Clear")))
++        {
++            exceptions.Clear();
++            this.selectedException = null;
++        }
++    }
++
++    private void DrawExceptionSelectList()
++    {
++        if (this.selectedPlugin is null)
++        {
++            return;
++        }
++
++        using var listBox = ImRaii.ListBox("##ExceptionSelectList", ImGui.GetContentRegionAvail() - new Vector2(0.0f, ImGui.GetStyle().FramePadding.Y));
++        if (!listBox) return;
++
++        if (!ScopedPluginLogService.PluginExceptionEntries.TryGetValue(this.selectedPlugin, out var exceptions))
++        {
++            return;
++        }
++
++        foreach (var (index, exceptionEntry) in exceptions.Index().Reverse())
++        {
++            var exceptionTypeName = exceptionEntry.Exception.GetType().Name;
++            var exceptionTimeString = exceptionEntry.Timestamp.ToLocalTime().ToString("G");
++
++            var entryHeight = ImGui.CalcTextSize(exceptionTypeName).Y + ImGui.CalcTextSize(exceptionTimeString).Y + ImGui.GetStyle().ItemSpacing.Y;
++
++            var cursorPosition = ImGui.GetCursorPosY();
++            if (ImGui.Selectable($"##{exceptionTypeName}{index}", this.selectedException == exceptionEntry, size: new Vector2(ImGui.GetContentRegionAvail().X, entryHeight)))
++            {
++                this.selectedException = exceptionEntry;
++            }
++
++            ImGui.SetCursorPosY(cursorPosition);
++            ImGui.Text(exceptionTypeName);
++            ImGui.TextColored(KnownColor.Gray.Vector(), exceptionTimeString);
++        }
++    }
++
++    private void DrawExceptionInformation()
++    {
++        using var frameChild = ImRaii.Child("ExceptionFrame", ImGui.GetContentRegionAvail() - new Vector2(0.0f, ImGui.GetStyle().FramePadding.Y));
++        if (!frameChild) return;
++
++        if (this.selectedException is null)
++        {
++            var labelText = Loc.Localize("MoonwakeExceptionSelectEntry", "Select an exception on the left");
++            var textSize = ImGui.CalcTextSize(labelText);
++
++            ImGui.SetCursorPos((ImGui.GetContentRegionAvail() / 2.0f) - (textSize / 2.0f));
++            ImGui.Text(labelText);
++            return;
++        }
++
++        ImGui.AlignTextToFramePadding();
++        ImGui.Text(this.selectedException.Exception.Message);
++
++        var buttonText = Loc.Localize("MoonwakeExceptionCopy", "Copy to clipboard");
++        var buttonWidth = ImGui.CalcTextSize(buttonText).X + (ImGui.GetStyle().FramePadding.X * 2.0f);
++
++        ImGui.SameLine(ImGui.GetContentRegionMax().X - buttonWidth);
++        if (ImGui.Button(buttonText))
++        {
++            ImGui.SetClipboardText(this.selectedException.Exception.ToString());
++        }
++
++        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (10.0f * ImGuiHelpers.GlobalScale));
++        using var child = ImRaii.Child("ExceptionChild", ImGui.GetContentRegionAvail());
++        if (!child) return;
++
++        ImGui.TextWrapped(this.selectedException.Exception.ToString());
++    }
++}
+diff --git a/Dalamud/Interface/Internal/Windows/GamepadModeNotifierWindow.cs b/Dalamud/Interface/Internal/Windows/GamepadModeNotifierWindow.cs
+deleted file mode 100644
+--- a/Dalamud/Interface/Internal/Windows/GamepadModeNotifierWindow.cs
++++ /dev/null
+@@ -1,53 +0,0 @@
+-using System.Numerics;
+-
+-using CheapLoc;
+-
+-using Dalamud.Bindings.ImGui;
+-using Dalamud.Interface.Utility;
+-using Dalamud.Interface.Windowing;
+-
+-namespace Dalamud.Interface.Internal.Windows;
+-
+-/// <summary>
+-/// Class responsible for drawing a notifier on screen that gamepad mode is active.
+-/// </summary>
+-internal class GamepadModeNotifierWindow : Window
+-{
+-    /// <summary>
+-    /// Initializes a new instance of the <see cref="GamepadModeNotifierWindow"/> class.
+-    /// </summary>
+-    public GamepadModeNotifierWindow()
+-        : base(
+-            "###DalamudGamepadModeNotifier",
+-            ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoMouseInputs
+-            | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.NoNav
+-            | ImGuiWindowFlags.NoInputs | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings,
+-            true)
+-    {
+-        this.Size = Vector2.Zero;
+-        this.SizeCondition = ImGuiCond.Always;
+-        this.IsOpen = false;
+-
+-        this.RespectCloseHotkey = false;
+-    }
+-
+-    /// <summary>
+-    /// Draws a light grey-ish, main-viewport-big filled rect in the background draw list alongside a text indicating gamepad mode.
+-    /// </summary>
+-    public override void Draw()
+-    {
+-        var drawList = ImGui.GetBackgroundDrawList();
+-        drawList.PushClipRectFullScreen();
+-        drawList.AddRectFilled(
+-            ImGuiHelpers.MainViewport.WorkPos,
+-            ImGuiHelpers.MainViewport.WorkPos + ImGuiHelpers.MainViewport.Size,
+-            0x661A1A1A);
+-        drawList.AddText(
+-            ImGuiHelpers.MainViewport.WorkPos,
+-            0xFFFFFFFF,
+-            Loc.Localize(
+-                "DalamudGamepadModeNotifierText",
+-                "Gamepad mode is ON. Press L1+L3 to deactivate, press R3 to toggle PluginInstaller."));
+-        drawList.PopClipRect();
+-    }
+-}
+diff --git a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+--- a/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/PluginInstaller/PluginInstallerWindow.cs
+@@ -2776,10 +2776,19 @@
+             ImGui.Indent();
+ 
+             // Installable from
++            string? repoSourceText = null;
+             if (manifest.SourceRepo.IsThirdParty)
+             {
+-                var repoText = Locs.PluginBody_Plugin3rdPartyRepo(manifest.SourceRepo.PluginMasterUrl);
+-                ImGui.TextColored(ImGuiColors.DalamudGrey3, repoText);
++                repoSourceText = Locs.PluginBody_Plugin3rdPartyRepo(manifest.SourceRepo.PluginMasterUrl);
++            }
++            else if (configuration.ThirdRepoList.Any(x => x.IsEnabled))
++            {
++                repoSourceText = Locs.PluginBody_UnrecordedSource();
++            }
++
++            if (!repoSourceText.IsNullOrEmpty())
++            {
++                ImGui.TextColored(ImGuiColors.DalamudGrey3, repoSourceText);
+ 
+                 ImGuiHelpers.ScaledDummy(2);
+             }
+@@ -3128,6 +3137,10 @@
+             {
+                 var repoText = Locs.PluginBody_Plugin3rdPartyRepo(manifest.InstalledFromUrl);
+                 ImGui.TextColored(ImGuiColors.DalamudGrey3, repoText);
++            }
++            else if (configuration.ThirdRepoList.Any(x => x.IsEnabled))
++            {
++                ImGui.TextColored(ImGuiColors.DalamudGrey3, Locs.PluginBody_UnrecordedSource());
+             }
+ 
+             // Description
+@@ -4599,6 +4612,8 @@
+ 
+         public static string PluginBody_Plugin3rdPartyRepo(string url) => Loc.Localize("InstallerPlugin3rdPartyRepo", "From custom plugin repository {0}").Format(url);
+ 
++        public static string PluginBody_UnrecordedSource() => Loc.Localize("MoonwakeInstallerUnrecordedSource", "Repository source was not recorded");
++
+         public static string PluginBody_Outdated => Loc.Localize("InstallerOutdatedPluginBody ", "This plugin is outdated and incompatible.");
+ 
+         public static string PluginBody_Incompatible => Loc.Localize("InstallerIncompatiblePluginBody ", "This plugin is incompatible with your version of Dalamud. Please attempt to restart your game.");
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/SettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/SettingsEntry.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/SettingsEntry.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/SettingsEntry.cs
+@@ -1,3 +1,4 @@
++using Dalamud.Utility;
+ using Dalamud.Utility.Internal;
+ 
+ namespace Dalamud.Interface.Internal.Windows.Settings;
+@@ -64,4 +65,14 @@
+     {
+         // ignored
+     }
++
++    /// <summary>
++    /// Function to be called when we are searching for settings.
++    /// </summary>
++    /// <param name="search">The term we are searching for.</param>
++    /// <returns>Whether this setting matches the term.</returns>
++    public virtual bool MatchesSearch(string search)
++    {
++        return !this.Name.Key.IsNullOrEmpty() && this.Name.ToString().Contains(search, StringComparison.InvariantCultureIgnoreCase);
++    }
+ }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs b/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/SettingsWindow.cs
+@@ -5,6 +5,7 @@
+ 
+ using Dalamud.Bindings.ImGui;
+ using Dalamud.Configuration.Internal;
++using Dalamud.Game.ClientState.GamePad;
+ using Dalamud.Interface.Colors;
+ using Dalamud.Interface.Internal.DesignSystem;
+ using Dalamud.Interface.Internal.Windows.Settings.Tabs;
+@@ -245,7 +246,7 @@
+ 
+         foreach (var settingsTab in this.tabs)
+         {
+-            var eligible = settingsTab.Entries.Where(x => !x.Name.Key.IsNullOrEmpty() && x.Name.ToString().Contains(this.searchInput, StringComparison.InvariantCultureIgnoreCase));
++            var eligible = settingsTab.Entries.Where(x => x.MatchesSearch(this.searchInput));
+ 
+             if (!eligible.Any())
+                 continue;
+@@ -295,8 +296,7 @@
+             ImGui.GetIO().BackendFlags &= ~ImGuiBackendFlags.HasGamepad;
+             ImGui.GetIO().ConfigFlags &= ~ImGuiConfigFlags.NavEnableSetMousePos;
+ 
+-            var di = Service<DalamudInterface>.Get();
+-            di.CloseGamepadModeNotifierWindow();
++            Service<GamepadState>.Get().EnableGamepadNav = false;
+         }
+         else
+         {
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabExperimental.cs
+@@ -68,7 +68,26 @@
+ 
+             new GapSettingsEntry(5, true),
+ 
+-            this.devModeEntry,
++            new GroupSettingsEntry(
++                this.devModeEntry,
++                new HintSettingsEntry(
++                    LazyLoc.Localize(
++                        "DalamudSettingEnableDeveloperModeDescription",
++                        "Developer mode adds various features to Dalamud that are useful to plugin developers. This includes, but is not limited to:")),
++                new BulletSettingsEntry(
++                    LazyLoc.Localize("DalamudSettingEnableDeveloperModeDevPlugins", "Loading plugins from local paths")),
++                new BulletSettingsEntry(
++                    LazyLoc.Localize("DalamudSettingEnableDeveloperModeTitleMenu", "A developer menu entry on the title screen")),
++                new BulletSettingsEntry(
++                    LazyLoc.Localize("DalamudSettingEnableDeveloperModeAsserts", "A window showing failed ImGui asserts")),
++                new BulletSettingsEntry(
++                    LazyLoc.Localize("DalamudSettingEnableDeveloperModeMainThread", "Checks that plugins call game APIs in safe ways")),
++                new BulletSettingsEntry(
++                    LazyLoc.Localize("DalamudSettingEnableDeveloperModeHooks", "Verification of plugin hooks")),
++                new HintSettingsEntry(
++                    LazyLoc.Localize(
++                        "DalamudSettingEnableDeveloperModeDescriptionEnd",
++                        "These can sometimes cause plugins to behave differently. If you are encountering issues, please try again with developer mode disabled."))),
+ 
+             new DevPluginsSettingsEntry(
+                 visibility: () => this.devModeEntry.Value),
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabGeneral.cs
+@@ -73,7 +73,7 @@
+ 
+         new SettingsEntry<bool>(
+             LazyLoc.Localize("DalamudSettingsSystemMenu", "Dalamud buttons in system menu"),
+-            LazyLoc.Localize("DalamudSettingsSystemMenuMsgHint", "Add buttons for Dalamud plugins and settings to the system menu."),
++            LazyLoc.Localize("DalamudSettingsSystemMenuMsgHint", "Add buttons for Dalamud plugins and settings to the system menu. You may have to restart the game for this setting to take effect."),
+             c => c.DoButtonsSystemMenu,
+             (v, c) => c.DoButtonsSystemMenu = v),
+ 
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabLook.cs b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabLook.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabLook.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Tabs/SettingsTabLook.cs
+@@ -107,6 +107,10 @@
+ 
+         new GapSettingsEntry(5, true),
+ 
++        CreateGamepadGroup(),
++
++        new GapSettingsEntry(5, true),
++
+         new SettingsEntry<bool>(
+             LazyLoc.Localize("DalamudSettingToggleFocusManagement", "Use escape to close Dalamud windows"),
+             LazyLoc.Localize("DalamudSettingToggleFocusManagementHint", "This will cause Dalamud windows to behave like in-game windows when pressing escape.\nThey will close one after another until all are closed. May not work for all plugins."),
+@@ -137,12 +141,6 @@
+             LazyLoc.Localize("DalamudSettingEnablePluginUISoundEffectsHint", "This will allow you to enable or disable sound effects generated by plugin user interfaces.\nThis is affected by your in-game `System Sounds` volume settings."),
+             c => c.EnablePluginUISoundEffects,
+             (v, c) => c.EnablePluginUISoundEffects = v),
+-
+-        new SettingsEntry<bool>(
+-            LazyLoc.Localize("DalamudSettingToggleGamepadNavigation", "Control plugins via gamepad"),
+-            LazyLoc.Localize("DalamudSettingToggleGamepadNavigationHint", "This will allow you to toggle between game and plugin navigation via L1+L3.\nToggle the PluginInstaller window via R3 if ImGui navigation is enabled."),
+-            c => c.IsGamepadNavigationEnabled,
+-            (v, c) => c.IsGamepadNavigationEnabled = v),
+ 
+         new SettingsEntry<bool>(
+             LazyLoc.Localize("DalamudSettingToggleTsm", "Show title screen menu"),
+@@ -316,4 +314,23 @@
+ 
+         base.Save();
+     }
++
++    private static GroupSettingsEntry CreateGamepadGroup()
++    {
++        var navigation = new SettingsEntry<bool>(
++            LazyLoc.Localize("DalamudSettingToggleGamepadNavigation", "Control plugins via gamepad"),
++            LazyLoc.Localize("DalamudSettingToggleGamepadNavigationHint", "This will allow you to toggle between game and plugin navigation via L1+L3.\nToggle the PluginInstaller window via R3 if ImGui navigation is enabled."),
++            c => c.IsGamepadNavigationEnabled,
++            (v, c) => c.IsGamepadNavigationEnabled = v);
++
++        return new GroupSettingsEntry(
++            navigation,
++            new GapSettingsEntry(5),
++            new SettingsEntry<bool>(
++                LazyLoc.Localize("DalamudSettingGamepadAutoExit", "Return gamepad control to the game when the last window closes"),
++                LazyLoc.Localize("DalamudSettingGamepadAutoExitHint", "Automatically disable gamepad mode when closing the last open Dalamud/plugin window."),
++                c => c.AutoExitGamepadNavigation,
++                (v, c) => c.AutoExitGamepadNavigation = v,
++                enabled: () => navigation.Value));
++    }
+ }
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/BulletSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/BulletSettingsEntry.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/BulletSettingsEntry.cs
+@@ -0,0 +1,37 @@
++using System.Diagnostics.CodeAnalysis;
++
++using Dalamud.Bindings.ImGui;
++using Dalamud.Interface.Colors;
++using Dalamud.Interface.Utility.Raii;
++using Dalamud.Utility.Internal;
++
++namespace Dalamud.Interface.Internal.Windows.Settings.Widgets;
++
++[SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1600:Elements should be documented", Justification = "Internals")]
++internal sealed class BulletSettingsEntry : SettingsEntry
++{
++    private readonly LazyLoc text;
++
++    public BulletSettingsEntry(LazyLoc text)
++    {
++        this.text = text;
++    }
++
++    public override void Load()
++    {
++        // ignored
++    }
++
++    public override void Save()
++    {
++        // ignored
++    }
++
++    public override void Draw()
++    {
++        using var color = ImRaii.PushColor(ImGuiCol.Text, ImGuiColors.DalamudGrey);
++        ImGui.Bullet();
++        ImGui.SameLine();
++        ImGui.TextWrapped(this.text);
++    }
++}
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/GroupSettingsEntry.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/GroupSettingsEntry.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/GroupSettingsEntry.cs
+@@ -0,0 +1,81 @@
++using System.Diagnostics.CodeAnalysis;
++using System.Linq;
++
++namespace Dalamud.Interface.Internal.Windows.Settings.Widgets;
++
++/// <summary>
++/// Bundles a primary entry with attached entries (i.e. hints).
++/// </summary>
++[SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1600:Elements should be documented", Justification = "Internals")]
++internal sealed class GroupSettingsEntry : SettingsEntry
++{
++    private readonly SettingsEntry[] entries;
++
++    public GroupSettingsEntry(SettingsEntry primary, params SettingsEntry[] attached)
++    {
++        this.entries = [primary, .. attached];
++        this.Name = primary.Name;
++    }
++
++    public override bool IsValid => this.entries.All(x => x.IsValid);
++
++    public override bool IsVisible => this.entries[0].IsVisible;
++
++    public override void Load()
++    {
++        foreach (var entry in this.entries)
++        {
++            entry.Load();
++        }
++    }
++
++    public override void Save()
++    {
++        foreach (var entry in this.entries)
++        {
++            entry.Save();
++        }
++    }
++
++    public override void Draw()
++    {
++        foreach (var entry in this.entries)
++        {
++            if (!entry.IsVisible)
++            {
++                continue;
++            }
++
++            entry.Draw();
++        }
++    }
++
++    public override void PostDraw()
++    {
++        foreach (var entry in this.entries)
++        {
++            entry.PostDraw();
++        }
++    }
++
++    public override void OnOpen()
++    {
++        foreach (var entry in this.entries)
++        {
++            entry.OnOpen();
++        }
++    }
++
++    public override void OnClose()
++    {
++        foreach (var entry in this.entries)
++        {
++            entry.OnClose();
++        }
++    }
++
++    public override bool MatchesSearch(string search)
++    {
++        return this.entries.Any(x => x.MatchesSearch(search));
++    }
++}
+diff --git a/Dalamud/Interface/Internal/Windows/Settings/Widgets/SettingsEntry{T}.cs b/Dalamud/Interface/Internal/Windows/Settings/Widgets/SettingsEntry{T}.cs
+--- a/Dalamud/Interface/Internal/Windows/Settings/Widgets/SettingsEntry{T}.cs
++++ b/Dalamud/Interface/Internal/Windows/Settings/Widgets/SettingsEntry{T}.cs
+@@ -16,6 +16,7 @@
+     private readonly LoadSettingDelegate load;
+     private readonly SaveSettingDelegate save;
+     private readonly Action<T?>? change;
++    private readonly Func<bool>? enabled;
+ 
+     private object? valueBacking;
+ 
+@@ -27,11 +28,13 @@
+         Action<T?>? change = null,
+         Func<T?, string?>? warning = null,
+         Func<T?, string?>? validity = null,
+-        Func<bool>? visibility = null)
++        Func<bool>? visibility = null,
++        Func<bool>? enabled = null)
+     {
+         this.load = load;
+         this.save = save;
+         this.change = change;
++        this.enabled = enabled;
+         this.Name = name;
+         this.Description = description;
+         this.CheckWarning = warning;
+@@ -73,6 +76,8 @@
+         var description = this.Description.ToString();
+ 
+         Debug.Assert(!string.IsNullOrWhiteSpace(name), "Name is empty");
++
++        using var disabled = ImRaii.Disabled(!(this.enabled?.Invoke() ?? true));
+ 
+         var type = typeof(T);
+ 
+diff --git a/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.Implementation.cs b/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.Implementation.cs
+--- a/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.Implementation.cs
++++ b/Dalamud/Interface/ManagedFontAtlas/Internals/FontAtlasFactory.Implementation.cs
+@@ -309,6 +309,13 @@
+             this.factory.BackendTask.ContinueWith(
+                 r =>
+                 {
++                    // IM init failed, mark exception as observed
++                    if (!r.IsCompletedSuccessfully)
++                    {
++                        _ = r.Exception;
++                        return;
++                    }
++
+                     using (this.syncRoot.EnterScope())
+                     {
+                         if (this.disposed)
+diff --git a/Dalamud/Interface/UiBuilder.cs b/Dalamud/Interface/UiBuilder.cs
+--- a/Dalamud/Interface/UiBuilder.cs
++++ b/Dalamud/Interface/UiBuilder.cs
+@@ -7,8 +7,6 @@
+ using Dalamud.Bindings.ImGui;
+ using Dalamud.Configuration.Internal;
+ using Dalamud.Game;
+-using Dalamud.Game.ClientState;
+-using Dalamud.Game.ClientState.Conditions;
+ using Dalamud.Game.Gui;
+ using Dalamud.Interface.FontIdentifier;
+ using Dalamud.Interface.ImGuiNotification;
+@@ -303,6 +301,7 @@
+     private readonly DalamudConfiguration configuration = Service<DalamudConfiguration>.Get();
+ 
+     private readonly DisposeSafety.ScopedFinalizer scopedFinalizer = new();
++    private readonly Lazy<IFontAtlas> fontAtlas;
+ 
+     private bool hasErrorWindow = false;
+     private Exception? lastError = null;
+@@ -342,12 +341,12 @@
+             this.interfaceManager.DefaultFontChanged += this.OnDefaultFontChanged;
+             this.scopedFinalizer.Add(() => this.interfaceManager.DefaultFontChanged -= this.OnDefaultFontChanged);
+ 
+-            this.FontAtlas =
+-                this.scopedFinalizer
+-                    .Add(
+-                        Service<FontAtlasFactory>
+-                            .Get()
+-                            .CreateFontAtlas(namespaceName, FontAtlasAutoRebuildMode.Async));
++            this.fontAtlas = new Lazy<IFontAtlas>(() => this.scopedFinalizer.Add(
++                                                      Service<FontAtlasFactory>
++                                                          .Get()
++                                                          .CreateFontAtlas(
++                                                              namespaceName,
++                                                              FontAtlasAutoRebuildMode.Async)));
+         }
+         catch
+         {
+@@ -553,17 +552,7 @@
+     /// <summary>
+     /// Gets a value indicating whether a cutscene is playing.
+     /// </summary>
+-    public bool CutsceneActive
+-    {
+-        get
+-        {
+-            var condition = Service<Condition>.GetNullable();
+-            if (condition == null)
+-                return false;
+-            return condition[ConditionFlag.OccupiedInCutSceneEvent]
+-                   || condition[ConditionFlag.WatchingCutscene78];
+-        }
+-    }
++    public bool CutsceneActive => UiHideState.CutsceneActive;
+ 
+     /// <summary>
+     /// Gets a value indicating whether this plugin should modify the game's interface at this time.
+@@ -573,12 +562,13 @@
+     /// <summary>
+     /// Gets a value indicating whether UI functions can be used.
+     /// </summary>
+-    public bool UiPrepared => Service<InterfaceManager.InterfaceManagerWithScene>.GetNullable() != null;
++    public bool UiPrepared =>
++        Service<InterfaceManager.InterfaceManagerWithScene>.GetNullable(ExceptionPropagationMode.None) != null;
+ 
+     /// <summary>
+     /// Gets the plugin-private font atlas.
+     /// </summary>
+-    public IFontAtlas FontAtlas { get; }
++    public IFontAtlas FontAtlas => this.fontAtlas.Value;
+ 
+     /// <summary>
+     /// Gets a value indicating whether to use "reduced motion". This usually means that you should use less
+@@ -612,7 +602,7 @@
+     internal bool HasMainUi => this.OpenMainUi != null;
+ 
+     private InterfaceManager? InterfaceManagerWithScene =>
+-        Service<InterfaceManager.InterfaceManagerWithScene>.GetNullable()?.Manager;
++        Service<InterfaceManager.InterfaceManagerWithScene>.GetNullable(ExceptionPropagationMode.None)?.Manager;
+ 
+     private Task<InterfaceManager> InterfaceManagerWithSceneAsync =>
+         Service<InterfaceManager.InterfaceManagerWithScene>.GetAsync().ContinueWith(task => task.Result.Manager);
+@@ -750,16 +740,15 @@
+     {
+         this.hitchDetector.Start();
+ 
+-        var clientState = Service<ClientState>.Get();
+         var gameGui = Service<GameGui>.GetNullable();
+         if (gameGui == null)
+             return;
+ 
+-        if ((gameGui.GameUiHidden && this.configuration.ToggleUiHide &&
++        if ((UiHideState.GameUiHidden && this.configuration.ToggleUiHide &&
+              !(this.DisableUserUiHide || this.DisableAutomaticUiHide)) ||
+-            (this.CutsceneActive && this.configuration.ToggleUiHideDuringCutscenes &&
++            (UiHideState.CutsceneActive && this.configuration.ToggleUiHideDuringCutscenes &&
+              !(this.DisableCutsceneUiHide || this.DisableAutomaticUiHide)) ||
+-            (clientState.IsGPosing && this.configuration.ToggleUiHideDuringGpose &&
++            (UiHideState.GPosing && this.configuration.ToggleUiHideDuringGpose &&
+              !(this.DisableGposeUiHide || this.DisableAutomaticUiHide)))
+         {
+             if (!this.lastFrameUiHideState)
+diff --git a/Dalamud/Interface/Utility/ImGuiHelpers.cs b/Dalamud/Interface/Utility/ImGuiHelpers.cs
+--- a/Dalamud/Interface/Utility/ImGuiHelpers.cs
++++ b/Dalamud/Interface/Utility/ImGuiHelpers.cs
+@@ -580,6 +580,49 @@
+     }
+ 
+     /// <summary>
++    /// Show a centered SeString.
++    /// </summary>
++    /// <param name="sss">The SeString to show.</param>
++    /// <param name="style">
++    /// The initial draw params to use. If <see cref="SeStringDrawParams.TargetDrawList"/> is set, the text is centered in the box
++    /// starting at <see cref="SeStringDrawParams.ScreenOffset"/>, <see cref="SeStringDrawParams.WrapWidth"/> wide.
++    /// You have to set both.
++    /// </param>
++    /// <returns>Interaction result of the rendered text.</returns>
++    public static SeStringDrawResult CenteredSeString(ReadOnlySpan<byte> sss, scoped in SeStringDrawParams style = default)
++    {
++        var drawParams = style.TargetDrawList is null
++                             ? style with { WrapWidth = style.WrapWidth ?? float.MaxValue }
++                             : style;
++
++        var renderer = Service<SeStringRenderer>.Get();
++        var width = renderer.Draw(
++            sss,
++            drawParams with
++            {
++                TargetDrawList = default(ImDrawListPtr),
++                ScreenOffset = Vector2.Zero,
++                Font = style.Font ?? ImGui.GetFont(),
++                FontSize = style.FontSize ?? ImGui.GetFontSize(),
++            }).Size.X;
++
++        if (style.TargetDrawList is null)
++        {
++            CenterCursorFor(width);
++            return renderer.Draw(sss, drawParams);
++        }
++
++        var offset = style.ScreenOffset ?? throw new ArgumentException(
++                         $"{nameof(style.ScreenOffset)} must be set when specifying a target draw list.",
++                         nameof(style));
++        var boxWidth = style.WrapWidth ?? throw new ArgumentException(
++                           $"{nameof(style.WrapWidth)} must be set when specifying a target draw list.",
++                           nameof(style));
++
++        return renderer.Draw(sss, drawParams with { ScreenOffset = offset with { X = offset.X + ((boxWidth - width) / 2) } });
++    }
++
++    /// <summary>
+     /// Center the ImGui cursor for a certain text.
+     /// </summary>
+     /// <param name="text">The text to center for.</param>
+diff --git a/Dalamud/Interface/Utility/LineEvaluator.cs b/Dalamud/Interface/Utility/LineEvaluator.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Utility/LineEvaluator.cs
+@@ -0,0 +1,41 @@
++﻿using System.Numerics;
++
++namespace Dalamud.Interface.Utility;
++
++/// <summary> A utility to evaluate an implicit line at one or multiple points. </summary>
++/// <param name="lineStart"> One end of the line. </param>
++/// <param name="lineEnd"> The other end of the line. </param>
++public readonly struct LineEvaluator(Vector2 lineStart, Vector2 lineEnd)
++{
++    /// <summary> The factors to multiply a points coordinates with. </summary>
++    public readonly Vector2 Factors = new(lineEnd.Y - lineStart.Y, lineStart.X - lineEnd.X);
++
++    /// <summary> The linear offset to add. </summary>
++    public readonly float Offset = (lineEnd.X * lineStart.Y) + (lineStart.X * lineEnd.Y);
++
++    /// <summary> Obtain the point closest to <paramref name="point"/> on a line. </summary>
++    /// <param name="point"> The observed point. </param>
++    /// <param name="lineStart"> One end of the line. </param>
++    /// <param name="lineEnd"> The other end of the line. </param>
++    /// <returns> The closest point that lies on the line. </returns>
++    public static Vector2 ClosestPointOnLine(Vector2 point, Vector2 lineStart, Vector2 lineEnd)
++    {
++        var startDist = point - lineStart;
++        var direction = lineEnd - lineStart;
++        var dotProduct = Vector2.Dot(startDist, direction);
++        if (dotProduct < 0)
++            return lineStart;
++
++        var directionLength = direction.LengthSquared();
++        if (dotProduct > directionLength)
++            return lineEnd;
++
++        return lineStart + direction * dotProduct / directionLength;
++    }
++
++    /// <summary> Evaluate the implicit line at the given point. </summary>
++    /// <param name="point"> The point to evaluate. </param>
++    /// <returns> The evaluation. </returns>
++    public float Evaluate(Vector2 point)
++        => Vector2.Dot(this.Factors, point) + this.Offset;
++}
+diff --git a/Dalamud/Interface/Utility/Raii/Disposables/ClipRectDisposable.cs b/Dalamud/Interface/Utility/Raii/Disposables/ClipRectDisposable.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Utility/Raii/Disposables/ClipRectDisposable.cs
+@@ -0,0 +1,78 @@
++﻿using System.Numerics;
++using System.Runtime.CompilerServices;
++
++using Dalamud.Bindings.ImGui;
++
++// ReSharper disable once CheckNamespace
++namespace Dalamud.Interface.Utility.Raii;
++
++public sealed class ClipRectDisposable : IDisposable
++{
++    /// <summary> Gets the number of ClipRects currently pushed with this object. </summary>
++    public int Count { get; private set; }
++
++    /// <summary> Push a new global ClipRect. </summary>
++    /// <param name="topLeft"> The top-left corner of the rectangle in screen coordinates. </param>
++    /// <param name="bottomRight"> The bottom-right corner of the rectangle in screen coordinates. </param>
++    /// <param name="intersectWithCurrentClipRect"> Whether to intersect the rectangle with the current existing ClipRect or to replace it. </param>
++    /// <param name="condition"> If this is false, the ClipRect is not pushed. </param>
++    /// <returns> A disposable object that can be used to push further ClipRects and pops those ClipRects after leaving scope. Use with using. </returns>
++    /// <remarks> If you need to keep ClipRects pushed longer than the current scope, use without using and use <seealso cref="PopUnsafe"/>. </remarks>
++    [OverloadResolutionPriority(50)]
++    public ClipRectDisposable Push(in Vector2 topLeft, in Vector2 bottomRight, bool intersectWithCurrentClipRect = false, bool condition = true)
++        => condition ? this.Push(topLeft, bottomRight, intersectWithCurrentClipRect) : this;
++
++    /// <inheritdoc cref="Push(in Vector2,in Vector2,bool,bool)"/>
++    [OverloadResolutionPriority(100)]
++    public ClipRectDisposable Push(in Vector2 topLeft, in Vector2 bottomRight, bool intersectWithCurrentClipRect = false)
++    {
++        ImGui.PushClipRect(topLeft, bottomRight, intersectWithCurrentClipRect);
++        ++this.Count;
++        return this;
++    }
++
++    /// <inheritdoc cref="Push(in Vector2,in Vector2,bool,bool)"/>
++    /// <param name="rectangle"> The rectangle in screen coordinates. </param>
++    /// <param name="intersectWithCurrentClipRect"> Whether to intersect the rectangle with the current existing ClipRect or to replace it. </param>
++    /// <param name="condition"> If this is false, the ClipRect is not pushed. </param>
++    [OverloadResolutionPriority(50)]
++    public ClipRectDisposable Push(in Rectangle rectangle, bool intersectWithCurrentClipRect = false, bool condition = true)
++        => condition ? this.Push(rectangle, intersectWithCurrentClipRect) : this;
++
++    /// <inheritdoc cref="Push(in Rectangle,bool,bool)"/>
++    [OverloadResolutionPriority(100)]
++    public ClipRectDisposable Push(in Rectangle rectangle, bool intersectWithCurrentClipRect = false)
++    {
++        ImGui.PushClipRect(rectangle.Minimum, rectangle.Maximum, intersectWithCurrentClipRect);
++        ++this.Count;
++        return this;
++    }
++
++    /// <summary> Pop a number of ClipRects in this draw list. </summary>
++    /// <param name="count"> The number of ClipRects to pop. This is clamped to the number of ClipRects pushed by this object. </param>
++    public void Pop(int count = 1)
++    {
++        if (count is 0)
++            return;
++
++        count =  Math.Min(count, this.Count);
++        this.Count -= count;
++        while (count-- > 0)
++            ImGui.PopClipRect();
++    }
++
++    /// <summary> Pop all ClipRects pushed with this object. </summary>
++    public void Dispose()
++        => this.Pop(this.Count);
++
++#pragma warning disable SA1204
++    /// <summary> Pop a number of ClipRects from the ClipRect stack without using an IDisposable. </summary>
++    /// <param name="count"> The number of rects to pop. The number is not checked against the rect stack. </param>
++    /// <remarks> Avoid using this function, and ClipRects across scopes, as much as possible. </remarks>
++    public static void PopUnsafe(int count = 1)
++    {
++        while (count-- > 0)
++            ImGui.PopClipRect();
++    }
++#pragma warning restore SA1204
++}
+diff --git a/Dalamud/Interface/Utility/Raii/Disposables/HeaderDisposable.cs b/Dalamud/Interface/Utility/Raii/Disposables/HeaderDisposable.cs
+--- a/Dalamud/Interface/Utility/Raii/Disposables/HeaderDisposable.cs
++++ b/Dalamud/Interface/Utility/Raii/Disposables/HeaderDisposable.cs
+@@ -1,4 +1,4 @@
+-using Dalamud.Bindings.ImGui;
++﻿using Dalamud.Bindings.ImGui;
+ 
+ // ReSharper disable once CheckNamespace
+ namespace Dalamud.Interface.Utility.Raii;
+@@ -36,6 +36,7 @@
+             this.Success = ImGui.CollapsingHeader(label, ref visible, flags);
+             if (this.Success)
+                 ImGui.PushID(label);
++            this.Alive = true;
+         }
+ 
+         public static implicit operator bool(HeaderDisposable value)
+diff --git a/Dalamud/Interface/Utility/Raii/ImGui.cs b/Dalamud/Interface/Utility/Raii/ImGui.cs
+--- a/Dalamud/Interface/Utility/Raii/ImGui.cs
++++ b/Dalamud/Interface/Utility/Raii/ImGui.cs
+@@ -1,4 +1,5 @@
+ using System.Numerics;
++using System.Runtime.CompilerServices;
+ 
+ using Dalamud.Bindings.ImGui;
+ 
+@@ -197,6 +198,22 @@
+     public static TreeNodeDisposable TreeNode(ImU8String label, ImGuiTreeNodeFlags flags)
+         => new(label, flags);
+ 
++    [OverloadResolutionPriority(100)]
++    public static ClipRectDisposable PushClipRect(in Rectangle rectangle, bool intersectWithCurrentClipRect = false)
++        => new ClipRectDisposable().Push(rectangle, intersectWithCurrentClipRect);
++
++    [OverloadResolutionPriority(50)]
++    public static ClipRectDisposable PushClipRect(in Rectangle rectangle, bool intersectWithCurrentClipRect = false, bool condition = true)
++        => new ClipRectDisposable().Push(rectangle, intersectWithCurrentClipRect, condition);
++
++    [OverloadResolutionPriority(100)]
++    public static ClipRectDisposable PushClipRect(in Vector2 upperLeftCorner, in Vector2 lowerRightCorner, bool intersectWithCurrentClipRect = false)
++        => new ClipRectDisposable().Push(upperLeftCorner, lowerRightCorner, intersectWithCurrentClipRect);
++
++    [OverloadResolutionPriority(50)]
++    public static ClipRectDisposable PushClipRect(in Vector2 upperLeftCorner, in Vector2 lowerRightCorner, bool intersectWithCurrentClipRect = false, bool condition = true)
++        => new ClipRectDisposable().Push(upperLeftCorner, lowerRightCorner, intersectWithCurrentClipRect, condition);
++
+     public static DisabledDisposable Disabled()
+         => new DisabledDisposable().Push();
+ 
+diff --git a/Dalamud/Interface/Utility/Rectangle.cs b/Dalamud/Interface/Utility/Rectangle.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Interface/Utility/Rectangle.cs
+@@ -0,0 +1,125 @@
++﻿using System.Numerics;
++
++using Dalamud.Bindings.ImGui;
++
++namespace Dalamud.Interface.Utility;
++
++/// <inheritdoc cref="ImRect"/>
++/// <remarks> C# version using <seealso cref="Vector2"/> instead of <seealso cref="ImGui.ImVec2()"/>. </remarks>
++public readonly record struct Rectangle(Vector2 Minimum, Vector2 Maximum)
++{
++    /// <summary> A rectangle that is only the point Zero. </summary>
++    public static readonly Rectangle Zero = new(Vector2.Zero, Vector2.Zero);
++
++    /// <inheritdoc cref="ImRect"/>
++    public Rectangle(float xMinimum, float yMinimum, float xMaximum, float yMaximum)
++        : this(new Vector2(xMinimum, yMinimum), new Vector2(xMaximum, yMaximum))
++    {
++    }
++
++    /// <inheritdoc cref="ImRect"/>
++    public Vector2 Size => new(this.Width, this.Height);
++
++    /// <summary> Gets the width of this rectangle. </summary>
++    public float Width => this.Maximum.X - this.Minimum.X;
++
++    /// <summary> Gets the height of this rectangle. </summary>
++    public float Height => this.Maximum.Y - this.Minimum.Y;
++
++    /// <summary> Gets the center of this rectangle. </summary>
++    public Vector2 Center => (this.Maximum + this.Minimum) / 2;
++
++    /// <summary> Gets a value indicating whether this rectangle is not correctly <see cref="Orient"/>ed. </summary>
++    public bool IsInverted => this.Minimum.X > this.Maximum.X || this.Minimum.Y > this.Maximum.Y;
++
++    /// <summary> Gets one of the corners not stored. If this rectangle is oriented (see <see cref="Orient"/>), this is at the bottom right. </summary>
++    public Vector2 BottomRight
++        => new(this.Maximum.X, this.Minimum.Y);
++
++    /// <summary> Gets one of the corners not stored. If this rectangle is oriented (see <see cref="Orient"/>), this is at the top left. </summary>
++    public Vector2 TopLeft
++        => new(this.Minimum.X, this.Maximum.Y);
++
++    public static implicit operator Rectangle(ImRect rect)
++        => new(rect.Min, rect.Max);
++
++    public static implicit operator ImRect(Rectangle rect)
++        => new(rect.Minimum, rect.Maximum);
++
++    /// <inheritdoc cref="ImRect"/>
++    public static Rectangle FromSize(Vector2 minimum, Vector2 size)
++        => new(minimum, minimum + size);
++
++    /// <inheritdoc cref="ImRect"/>
++    public static Rectangle FromSize(Vector2 size)
++        => new(Vector2.Zero, size);
++
++    /// <inheritdoc cref="ImRect"/>
++    public static Rectangle FromSize(float sizeX, float sizeY)
++        => new(Vector2.Zero, new Vector2(sizeX, sizeY));
++
++    /// <summary> Whether this rectangle contains the given point. </summary>
++    /// <param name="point"> The point to check. </param>
++    /// <returns> Whether the point is contained in the rectangle. </returns>
++    public bool Contains(Vector2 point)
++        => point.X >= this.Minimum.X && point.X <= this.Maximum.X && point.Y >= this.Minimum.Y && point.Y <= this.Maximum.Y;
++
++    /// <summary> Add a point to a rectangle, i.e. ensure that the point is within the rectangle. </summary>
++    /// <param name="point"> The point to add. </param>
++    /// <returns> The minimum rectangle containing the added point and the entire prior rectangle. </returns>
++    public Rectangle Add(Vector2 point)
++        => new(MathF.Min(point.X, this.Minimum.X), MathF.Min(point.Y, this.Minimum.Y), MathF.Max(point.X, this.Maximum.X), MathF.Max(point.Y, this.Maximum.Y));
++
++    /// <summary> Expand the rectangle in all directions. </summary>
++    /// <param name="amount"> The amount to expand the rectangle by. </param>
++    /// <returns> The expanded rectangle. </returns>
++    public Rectangle Expand(float amount)
++        => new(this.Minimum.X - amount, this.Minimum.Y - amount, this.Maximum.X + amount, this.Maximum.Y + amount);
++
++    /// <summary> Expand the rectangle in all directions. </summary>
++    /// <param name="amount"> The amount to expand the rectangle by in X and Y direction. </param>
++    /// <returns> The expanded rectangle. </returns>
++    public Rectangle Expand(Vector2 amount)
++        => new(this.Minimum.X - amount.X, this.Minimum.Y - amount.Y, this.Maximum.X + amount.X, this.Maximum.Y + amount.Y);
++
++    /// <summary> Check whether this rectangle overlaps the given rectangle. </summary>
++    /// <param name="rect"> The other rectangle to check. </param>
++    /// <returns> Whether a real overlap with measure greater than 0 exists between the two rectangles. </returns>
++    public bool Overlaps(in Rectangle rect)
++        => rect.Minimum.Y < this.Maximum.Y && rect.Maximum.Y > this.Minimum.Y && rect.Minimum.X < this.Maximum.X && rect.Maximum.X > this.Minimum.X;
++
++    /// <summary> Check whether this rectangle overlaps the given line on at least one point. </summary>
++    /// <param name="lineStart"> One end of the line. </param>
++    /// <param name="lineEnd"> The other end of the line. </param>
++    /// <returns> Whether at least one point lies both in the rectangle and on the line. </returns>
++    public bool OverlapsLine(Vector2 lineStart, Vector2 lineEnd)
++    {
++        if (this.Contains(lineStart) || this.Contains(lineEnd))
++            return true;
++
++        var oriented = this.Orient();
++        // Check the full line being on any side of the rectangle.
++        if ((lineStart.X < oriented.Minimum.X && lineEnd.X < oriented.Minimum.X)
++         || (lineStart.X > oriented.Maximum.X && lineEnd.X > oriented.Maximum.X)
++         || (lineStart.Y < oriented.Minimum.Y && lineEnd.Y < oriented.Minimum.Y)
++         || (lineStart.Y > oriented.Maximum.Y && lineEnd.Y > oriented.Maximum.Y))
++            return false;
++
++        // Evaluate the corners of the rectangle against the line.
++        var lineEvaluator = new LineEvaluator(lineStart, lineEnd);
++        var (sign0, sign1, sign2, sign3) = (Math.Sign(lineEvaluator.Evaluate(oriented.Minimum)),
++            Math.Sign(lineEvaluator.Evaluate(oriented.TopLeft)),
++            Math.Sign(lineEvaluator.Evaluate(oriented.BottomRight)),
++            Math.Sign(lineEvaluator.Evaluate(oriented.Maximum)));
++        return Math.Abs(sign0 + sign1 + sign2 + sign3) != Math.Abs(sign0) + Math.Abs(sign1) + Math.Abs(sign2) + Math.Abs(sign3);
++    }
++
++    /// <summary> Orient this rectangle, so that <see cref="Minimum"/> is the lower left corner and <see cref="Maximum"/> is the upper right corner. </summary>
++    /// <returns>An oriented rectangle.</returns>
++    public Rectangle Orient()
++    {
++        var (minX, maxX) = this.Minimum.X > this.Maximum.X ? (this.Maximum.X, this.Minimum.X) : (this.Minimum.X, this.Maximum.X);
++        var (minY, maxY) = this.Minimum.Y > this.Maximum.Y ? (this.Maximum.Y, this.Minimum.Y) : (this.Minimum.Y, this.Maximum.Y);
++        return new Rectangle(minX, minY, maxX, maxY);
++    }
++}
+diff --git a/Dalamud/Interface/Windowing/WindowSystem.cs b/Dalamud/Interface/Windowing/WindowSystem.cs
+--- a/Dalamud/Interface/Windowing/WindowSystem.cs
++++ b/Dalamud/Interface/Windowing/WindowSystem.cs
+@@ -15,7 +15,9 @@
+ {
+     private static DateTimeOffset lastAnyFocus;
+ 
+-    private readonly List<WindowHost> windows = [];
++    private readonly List<WindowHost> windowHosts = [];
++    private readonly List<WindowHost> windowHostsBuffer = [];
++    private readonly List<IWindow> windows = [];
+ 
+     private string lastFocusedWindowName = string.Empty;
+ 
+@@ -45,7 +47,7 @@
+     public static TimeSpan TimeSinceLastAnyFocus => DateTimeOffset.Now - lastAnyFocus;
+ 
+     /// <inheritdoc/>
+-    public IReadOnlyList<IWindow> Windows => this.windows.Select(c => c.Window).ToList();
++    public IReadOnlyList<IWindow> Windows => this.windows;
+ 
+     /// <inheritdoc/>
+     public bool HasAnyFocus { get; private set; }
+@@ -90,23 +92,29 @@
+     /// <inheritdoc/>
+     public void AddWindow(IWindow window)
+     {
+-        if (this.windows.Any(x => x.Window.WindowName == window.WindowName))
++        if (this.windowHosts.Any(host => host.Window.WindowName == window.WindowName))
+             throw new ArgumentException("A window with this name/ID already exists.");
+ 
+-        this.windows.Add(new WindowHost(window));
++        this.windowHosts.Add(new WindowHost(window));
++        this.windows.Add(window);
+     }
+ 
+     /// <inheritdoc/>
+     public void RemoveWindow(IWindow window)
+     {
+-        if (this.windows.All(c => c.Window != window))
++        if (this.windowHosts.All(host => host.Window != window))
+             throw new ArgumentException("This window is not registered on this WindowSystem.");
+ 
+-        this.windows.RemoveAll(c => c.Window == window);
+-    }
+-
+-    /// <inheritdoc/>
+-    public void RemoveAllWindows() => this.windows.Clear();
++        this.windowHosts.RemoveAll(host => host.Window == window);
++        this.windows.RemoveAll(win => win == window);
++    }
++
++    /// <inheritdoc/>
++    public void RemoveAllWindows()
++    {
++        this.windowHosts.Clear();
++        this.windows.Clear();
++    }
+ 
+     /// <inheritdoc/>
+     public void Draw()
+@@ -134,8 +142,12 @@
+         if (config?.ReduceMotions ?? false)
+             flags |= WindowHost.WindowDrawFlags.IsReducedMotion;
+ 
+-        // Shallow clone the list of windows so that we can edit it without modifying it while the loop is iterating
+-        foreach (var window in this.windows.ToArray())
++        // Make a copy of the list of WindowHosts, so that we can add/remove windows
++        // without modifying the list during iteration
++        this.windowHostsBuffer.Clear();
++        this.windowHostsBuffer.AddRange(this.windowHosts);
++
++        foreach (var window in this.windowHostsBuffer)
+         {
+ #if DEBUG
+             // Log.Verbose($"[WS{(hasNamespace ? "/" + this.Namespace : string.Empty)}] Drawing {window.WindowName}");
+@@ -152,15 +164,15 @@
+             window.DrawInternal(parameters, persistence);
+         }
+ 
+-        var focusedWindow = this.windows.FirstOrDefault(window => window.Window.IsFocused);
++        var focusedWindow = this.windows.FirstOrDefault(win => win.IsFocused);
+         this.HasAnyFocus = focusedWindow != null;
+ 
+         if (this.HasAnyFocus)
+         {
+-            if (this.lastFocusedWindowName != focusedWindow.Window.WindowName)
++            if (this.lastFocusedWindowName != focusedWindow.WindowName)
+             {
+-                Log.Verbose($"WindowSystem \"{this.Namespace}\" Window \"{focusedWindow.Window.WindowName}\" has focus now");
+-                this.lastFocusedWindowName = focusedWindow.Window.WindowName;
++                Log.Verbose($"WindowSystem \"{this.Namespace}\" Window \"{focusedWindow.WindowName}\" has focus now");
++                this.lastFocusedWindowName = focusedWindow.WindowName;
+             }
+ 
+             HasAnyWindowSystemFocus = true;
+@@ -177,15 +189,11 @@
+             }
+         }
+ 
+-        ShouldInhibitAtkCloseEvents |= this.windows.Any(w => w.Window.IsFocused &&
+-                                                            w.Window.RespectCloseHotkey &&
+-                                                            !w.Window.IsPinned &&
+-                                                            !w.Window.IsClickthrough);
+-
+-        ShouldInhibitAtkCollisions |= this.windows.Any(w => w.Window.IsHovered &&
+-                                                            w.Window.InhibitAtkCollision &&
+-                                                            !w.Window.IsPinned &&
+-                                                            !w.Window.IsClickthrough);
++        ShouldInhibitAtkCloseEvents |= this.windows.Any(
++            win => win.IsFocused && win.RespectCloseHotkey && !win.IsPinned && !win.IsClickthrough);
++
++        ShouldInhibitAtkCollisions |= this.windows.Any(
++            win => win.IsHovered && win.InhibitAtkCollision && !win.IsPinned && !win.IsClickthrough);
+ 
+         if (hasNamespace)
+             ImGui.PopID();
+diff --git a/Dalamud/IoC/Internal/ServiceScope.cs b/Dalamud/IoC/Internal/ServiceScope.cs
+--- a/Dalamud/IoC/Internal/ServiceScope.cs
++++ b/Dalamud/IoC/Internal/ServiceScope.cs
+@@ -180,7 +180,11 @@
+         // have unregistered the event listeners, on next framework tick, none can be running anymore.
+         // This has an additional effect of ensuring that DtrBar entries are completely removed on return.
+         // Note that this still does not handle Framework.RunOnTick with specified delays.
+-        await (Service<Framework>.GetNullable()?.DelayTicks(1) ?? Task.CompletedTask).SuppressException();
++        // If we're unloading, something else may block the framework thread, so we skip it in this case.
++        if (!ServiceManager.UnloadCancellationToken.IsCancellationRequested)
++        {
++            await (Service<Framework>.GetNullable()?.DelayTicks(1) ?? Task.CompletedTask).SuppressException();
++        }
+ 
+         if (exceptions is not null)
+             throw new AggregateException(exceptions);
+diff --git a/Dalamud/Logging/ScopedPluginLogService.cs b/Dalamud/Logging/ScopedPluginLogService.cs
+--- a/Dalamud/Logging/ScopedPluginLogService.cs
++++ b/Dalamud/Logging/ScopedPluginLogService.cs
+@@ -1,3 +1,6 @@
++using System.Collections.Concurrent;
++
++using Dalamud.Interface.Internal.Windows.Data.Widgets;
+ using Dalamud.IoC;
+ using Dalamud.IoC.Internal;
+ using Dalamud.Plugin.Internal;
+@@ -18,8 +21,13 @@
+ #pragma warning disable SA1015
+ [ResolveVia<IPluginLog>]
+ #pragma warning restore SA1015
+-internal class ScopedPluginLogService : IServiceType, IPluginLog
++internal class ScopedPluginLogService : IPluginLog, IInternalDisposableService
+ {
++    /// <summary>
++    /// Gets the maximum number of exceptions tracked in <see cref="PluginExceptionEntries"/>.
++    /// </summary>
++    internal const int MaxPluginExceptionEntries = 100;
++
+     private readonly LocalPlugin localPlugin;
+     private readonly PluginErrorHandler errorHandler;
+ 
+@@ -53,6 +61,17 @@
+     {
+         get => this.levelSwitch.MinimumLevel;
+         set => this.levelSwitch.MinimumLevel = value;
++    }
++
++    /// <summary>
++    /// Gets a Dictionary of exceptions grouped by plugin source. For use with <see cref="ExceptionWidget"/>.
++    /// </summary>
++    internal static ConcurrentDictionary<LocalPlugin, ConcurrentQueue<PluginExceptionEntry>> PluginExceptionEntries { get; private set; } = [];
++
++    /// <inheritdoc />
++    public void DisposeService()
++    {
++        PluginExceptionEntries.TryRemove(this.localPlugin, out _);
+     }
+ 
+     /// <inheritdoc />
+@@ -117,6 +136,16 @@
+         if (level == LogEventLevel.Error)
+             this.errorHandler.NotifyError();
+ 
++        if (exception is not null)
++        {
++            var entries = PluginExceptionEntries.GetOrAdd(this.localPlugin, _ => new());
++
++            if (entries.Count < MaxPluginExceptionEntries)
++            {
++                entries.Enqueue(new PluginExceptionEntry(exception, DateTime.UtcNow));
++            }
++        }
++
+         this.Logger.Write(
+             level,
+             exception: exception,
+@@ -135,3 +164,8 @@
+         return this.localPlugin.IsDev ? LogEventLevel.Verbose : LogEventLevel.Debug;
+     }
+ }
++
++/// <summary>
++/// Record for exception entries to record additional information for use in <see cref="ExceptionWidget"/>.
++/// </summary>
++internal record PluginExceptionEntry(Exception Exception, DateTime Timestamp);
+diff --git a/Dalamud/NativeMethods.txt b/Dalamud/NativeMethods.txt
+--- a/Dalamud/NativeMethods.txt
++++ b/Dalamud/NativeMethods.txt
+@@ -28,6 +28,8 @@
+ GlobalLock
+ GlobalUnlock
+ GLOBAL_ALLOC_FLAGS
++
++GetSystemInfo
+ 
+ VirtualAlloc
+ VirtualProtect
+diff --git a/Dalamud/Plugin/DalamudPluginInterface.cs b/Dalamud/Plugin/DalamudPluginInterface.cs
+--- a/Dalamud/Plugin/DalamudPluginInterface.cs
++++ b/Dalamud/Plugin/DalamudPluginInterface.cs
+@@ -137,6 +137,9 @@
+     public DirectoryInfo DalamudAssetDirectory => Service<Dalamud>.Get().AssetDirectory;
+ 
+     /// <inheritdoc/>
++    public Assembly Assembly => this.plugin.Assembly;
++
++    /// <inheritdoc/>
+     public FileInfo AssemblyLocation => this.plugin.DllFile;
+ 
+     /// <inheritdoc/>
+diff --git a/Dalamud/Plugin/IDalamudPluginInterface.cs b/Dalamud/Plugin/IDalamudPluginInterface.cs
+--- a/Dalamud/Plugin/IDalamudPluginInterface.cs
++++ b/Dalamud/Plugin/IDalamudPluginInterface.cs
+@@ -119,6 +119,11 @@
+     DirectoryInfo DalamudAssetDirectory { get; }
+ 
+     /// <summary>
++    /// Gets your plugin's Assembly.
++    /// </summary>
++    Assembly Assembly { get; }
++
++    /// <summary>
+     /// Gets the location of your plugin assembly.
+     /// </summary>
+     FileInfo AssemblyLocation { get; }
+diff --git a/Dalamud/Plugin/Ipc/Exceptions/AdapterMethodMissingException.cs b/Dalamud/Plugin/Ipc/Exceptions/AdapterMethodMissingException.cs
+--- a/Dalamud/Plugin/Ipc/Exceptions/AdapterMethodMissingException.cs
++++ b/Dalamud/Plugin/Ipc/Exceptions/AdapterMethodMissingException.cs
+@@ -1,6 +1,6 @@
+ namespace Dalamud.Plugin.Ipc;
+ 
+-/// <summary> Exception thrown if the method requested in a <see cref="IIdDataShareAdapter"/> or a <see cref="INameDataShareAdapter"/> does not exist. </summary>
++/// <summary> Exception thrown if the method requested in a <see cref="IIdDataShareAdapter"/> does not exist. </summary>
+ public sealed class AdapterMethodMissingException : Exception
+ {
+     /// <summary> Initializes a new instance of the <see cref="AdapterMethodMissingException"/> class using a named method. </summary>
+diff --git a/Dalamud/Plugin/Ipc/Exceptions/AdapterTypeMismatchException.cs b/Dalamud/Plugin/Ipc/Exceptions/AdapterTypeMismatchException.cs
+--- a/Dalamud/Plugin/Ipc/Exceptions/AdapterTypeMismatchException.cs
++++ b/Dalamud/Plugin/Ipc/Exceptions/AdapterTypeMismatchException.cs
+@@ -1,6 +1,6 @@
+ namespace Dalamud.Plugin.Ipc;
+ 
+-/// <summary> Exception thrown if the method requested in a <see cref="IIdDataShareAdapter"/> or a <see cref="INameDataShareAdapter"/> can not handle a specified argument type. </summary>
++/// <summary> Exception thrown if the method requested in a <see cref="IIdDataShareAdapter"/> can not handle a specified argument type. </summary>
+ public sealed class AdapterTypeMismatchException : Exception
+ {
+     /// <summary> Initializes a new instance of the <see cref="AdapterTypeMismatchException"/> class using a named method. </summary>
+diff --git a/Dalamud/Plugin/Services/IGamepadState.cs b/Dalamud/Plugin/Services/IGamepadState.cs
+--- a/Dalamud/Plugin/Services/IGamepadState.cs
++++ b/Dalamud/Plugin/Services/IGamepadState.cs
+@@ -19,6 +19,7 @@
+     /// <summary>
+     /// Gets or sets a value indicating whether gamepad input is intercepted for ImGui navigation,
+     /// preventing it from passing through to the game.
++    /// Setting to true is ignored while plugin gamepad input is disabled in Dalamud settings.
+     /// </summary>
+     public bool EnableGamepadNav { get; set; }
+ 
+diff --git a/Dalamud/Service/ServiceManager.cs b/Dalamud/Service/ServiceManager.cs
+--- a/Dalamud/Service/ServiceManager.cs
++++ b/Dalamud/Service/ServiceManager.cs
+@@ -323,6 +323,20 @@
+ 
+             while (servicesToLoad.Count != 0)
+             {
++                // Unload started while initializing, i.e. due to fault elsewhere
++                if (UnloadCancellationToken.IsCancellationRequested)
++                {
++                    Log.Information("Unload requested during service initialization, stopping");
++
++                    while (tasks.Count != 0)
++                    {
++                        await Task.WhenAny(tasks);
++                        tasks.RemoveAll(x => x.IsCompleted);
++                    }
++
++                    return;
++                }
++
+                 foreach (var serviceType in servicesToLoad)
+                 {
+                     var hasDeps = true;
+diff --git a/Dalamud/Utility/DisposeSafety.cs b/Dalamud/Utility/DisposeSafety.cs
+--- a/Dalamud/Utility/DisposeSafety.cs
++++ b/Dalamud/Utility/DisposeSafety.cs
+@@ -5,6 +5,8 @@
+ using System.Runtime.InteropServices;
+ using System.Threading;
+ using System.Threading.Tasks;
++
++using Microsoft.Extensions.ObjectPool;
+ 
+ namespace Dalamud.Utility;
+ 
+@@ -141,8 +143,20 @@
+     /// </summary>
+     public class ScopedFinalizer : IDisposeCallback, IAsyncDisposable
+     {
+-        private readonly List<object> objects = [];
++        private static readonly ObjectPool<List<object>> ListPool = ObjectPool.Create<List<object>>();
++
+         private readonly Lock objectsLock = new();
++
++        private List<object> objects;
++        private bool isDisposed;
++
++        /// <summary>
++        /// Initializes a new instance of the <see cref="ScopedFinalizer"/> class.
++        /// </summary>
++        public ScopedFinalizer()
++        {
++            this.objects = ListPool.Get();
++        }
+ 
+         /// <inheritdoc/>
+         public event Action<IDisposeCallback>? BeforeDispose;
+@@ -306,6 +320,9 @@
+         /// <inheritdoc/>
+         public void Dispose()
+         {
++            if (this.isDisposed)
++                return;
++
+             this.BeforeDispose?.InvokeSafely(this);
+ 
+             List<Exception>? exceptions = null;
+@@ -362,6 +379,9 @@
+ 
+                 throw exs;
+             }
++
++            ListPool.Return(this.objects);
++            this.isDisposed = true;
+         }
+ 
+         /// <inheritdoc/>
+diff --git a/Dalamud/Utility/ReadOnlySePayloadExtensions.cs b/Dalamud/Utility/ReadOnlySePayloadExtensions.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Utility/ReadOnlySePayloadExtensions.cs
+@@ -0,0 +1,48 @@
++using Dalamud.Game.Text.SeStringHandling.Payloads;
++
++using Lumina.Text.Payloads;
++using Lumina.Text.ReadOnly;
++
++namespace Dalamud.Utility;
++
++/// <summary>
++/// Extension functions for <see cref="ReadOnlySePayload"/>.
++/// </summary>
++public static class ReadOnlySePayloadExtensions
++{
++    /// <inheritdoc cref="ReadOnlySePayloadSpanExtensions.IsMacro(ReadOnlySePayloadSpan, MacroCode)"/>
++    public static bool IsMacro(this ReadOnlySePayload payload, MacroCode macroCode)
++    {
++        return payload.AsSpan().IsMacro(macroCode);
++    }
++
++    /// <inheritdoc cref="ReadOnlySePayloadSpanExtensions.IsLink(ReadOnlySePayloadSpan, LinkMacroPayloadType)"/>
++    public static bool IsLink(this ReadOnlySePayload payload, LinkMacroPayloadType linkType)
++    {
++        return payload.AsSpan().IsLink(linkType);
++    }
++
++    /// <inheritdoc cref="ReadOnlySePayloadSpanExtensions.IsLinkTerminator(ReadOnlySePayloadSpan)"/>
++    public static bool IsLinkTerminator(this ReadOnlySePayload payload)
++    {
++        return payload.AsSpan().IsLinkTerminator();
++    }
++
++    /// <inheritdoc cref="ReadOnlySePayloadSpanExtensions.TryReadLink(ReadOnlySePayloadSpan, out LinkMacroPayloadType, out ReadOnlySeExpressionSpan, out ReadOnlySeExpressionSpan, out ReadOnlySeExpressionSpan, out ReadOnlySeExpressionSpan)"/>
++    public static bool TryReadLink(
++        this ReadOnlySePayload payload,
++        out LinkMacroPayloadType linkType,
++        out ReadOnlySeExpressionSpan expr1,
++        out ReadOnlySeExpressionSpan expr2,
++        out ReadOnlySeExpressionSpan expr3,
++        out ReadOnlySeExpressionSpan expr4)
++    {
++        return payload.AsSpan().TryReadLink(out linkType, out expr1, out expr2, out expr3, out expr4);
++    }
++
++    /// <inheritdoc cref="ReadOnlySePayloadSpanExtensions.TryReadDalamudLink(ReadOnlySePayloadSpan, out DalamudLinkPayload)"/>
++    public static bool TryReadDalamudLink(this ReadOnlySePayload rosp, out DalamudLinkPayload payload)
++    {
++        return rosp.AsSpan().TryReadDalamudLink(out payload);
++    }
++}
+diff --git a/Dalamud/Utility/ReadOnlySePayloadSpanExtensions.cs b/Dalamud/Utility/ReadOnlySePayloadSpanExtensions.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Utility/ReadOnlySePayloadSpanExtensions.cs
+@@ -0,0 +1,180 @@
++using Dalamud.Game.Text.SeStringHandling;
++using Dalamud.Game.Text.SeStringHandling.Payloads;
++
++using Lumina.Text.Payloads;
++using Lumina.Text.ReadOnly;
++
++using Newtonsoft.Json;
++
++namespace Dalamud.Utility;
++
++/// <summary>
++/// Extension functions for <see cref="ReadOnlySePayloadSpan"/>.
++/// </summary>
++public static class ReadOnlySePayloadSpanExtensions
++{
++    /// <summary>
++    /// Determines whether the payload is a macro payload matching the specified macro code.
++    /// </summary>
++    /// <param name="payload">The payload span to evaluate.</param>
++    /// <param name="macroCode">The macro code to check against.</param>
++    /// <returns><see langword="true"/> if the payload is a macro matching <paramref name="macroCode"/>; otherwise, <see langword="false"/>.</returns>
++    public static bool IsMacro(this ReadOnlySePayloadSpan payload, MacroCode macroCode)
++    {
++        return payload.Type == ReadOnlySePayloadType.Macro
++            && payload.MacroCode == macroCode;
++    }
++
++    /// <summary>
++    /// Determines whether the payload is a link macro payload of the specified link type.
++    /// </summary>
++    /// <param name="payload">The payload span to evaluate.</param>
++    /// <param name="linkType">The link macro type to check against.</param>
++    /// <returns><see langword="true"/> if the payload is a link macro matching <paramref name="linkType"/>; otherwise, <see langword="false"/>.</returns>
++    public static bool IsLink(this ReadOnlySePayloadSpan payload, LinkMacroPayloadType linkType)
++    {
++        return payload.IsMacro(MacroCode.Link)
++            && payload.TryGetExpression(out var linkTypeExpression)
++            && linkTypeExpression.TryGetInt(out var payloadLinkType)
++            && payloadLinkType == (int)linkType;
++    }
++
++    /// <summary>
++    /// Determines whether the specified payload represents a link terminator.
++    /// </summary>
++    /// <param name="payload">The payload to check.</param>
++    /// <returns><see langword="true"/> if the payload is a link terminator; otherwise, <see langword="false"/>.</returns>
++    public static bool IsLinkTerminator(this ReadOnlySePayloadSpan payload)
++    {
++        return payload.IsLink(LinkMacroPayloadType.Terminator);
++    }
++
++    /// <summary>
++    /// Attempts to read link parameters from the specified payload.
++    /// </summary>
++    /// <param name="payload">The payload to read from.</param>
++    /// <param name="linkType">The link type.</param>
++    /// <param name="expr1">The first integer expression.</param>
++    /// <param name="expr2">The second integer expression.</param>
++    /// <param name="expr3">The third integer expression.</param>
++    /// <param name="expr4">An optional string expression.</param>
++    /// <returns><see langword="true"/> if the payload is a link and its expressions were successfully read; otherwise, <see langword="false"/>.</returns>
++    public static bool TryReadLink(
++        this ReadOnlySePayloadSpan payload,
++        out LinkMacroPayloadType linkType,
++        out ReadOnlySeExpressionSpan expr1,
++        out ReadOnlySeExpressionSpan expr2,
++        out ReadOnlySeExpressionSpan expr3,
++        out ReadOnlySeExpressionSpan expr4)
++    {
++        linkType = default;
++        expr1 = default;
++        expr2 = default;
++        expr3 = default;
++        expr4 = default;
++
++        var enu = payload.GetEnumerator();
++
++        if (!enu.MoveNext() || !enu.Current.TryGetInt(out var typeInt))
++            return false;
++
++        linkType = (LinkMacroPayloadType)typeInt;
++
++        if (!enu.MoveNext())
++            return false;
++
++        expr1 = enu.Current;
++
++        if (!enu.MoveNext())
++            return false;
++
++        expr2 = enu.Current;
++
++        if (!enu.MoveNext())
++            return false;
++
++        expr3 = enu.Current;
++
++        // probably an optional display string
++        if (!enu.MoveNext())
++            return true;
++
++        expr4 = enu.Current;
++
++        return true;
++    }
++
++    /// <summary>
++    /// Attempts to read a Dalamud link payload from the specified payload.
++    /// </summary>
++    /// <param name="rosps">The payload to read from.</param>
++    /// <param name="payload">The parsed <see cref="DalamudLinkPayload"/> if parsing succeeded, or <see langword="default"/> if parsing failed.</param>
++    /// <returns><see langword="true"/> if the payload was successfully parsed into a <see cref="DalamudLinkPayload"/>; otherwise, <see langword="false"/>.</returns>
++    public static bool TryReadDalamudLink(this ReadOnlySePayloadSpan rosps, out DalamudLinkPayload payload)
++    {
++        payload = default;
++
++        if (!rosps.IsLink((LinkMacroPayloadType)Payload.EmbeddedInfoType.DalamudLink))
++            return false;
++
++        uint commandId;
++
++        // compatibility for older versions of the payload
++        if (!rosps.TryGetExpression(
++                out _,
++                out var commandIdExpression,
++                out var extra1Expression,
++                out var extra2Expression,
++                out var compositeExpression))
++        {
++            if (!rosps.TryGetExpression(out _, out var pluginExpression, out commandIdExpression))
++                return false;
++
++            if (!pluginExpression.TryGetString(out var pluginString))
++                return false;
++
++            if (!commandIdExpression.TryGetUInt(out commandId))
++                return false;
++
++            payload = new DalamudLinkPayload()
++            {
++                CommandId = commandId,
++                Plugin = pluginString.ToString(),
++            };
++            return true;
++        }
++
++        if (!commandIdExpression.TryGetUInt(out commandId))
++            return false;
++
++        if (!extra1Expression.TryGetInt(out var extra1))
++            return false;
++
++        if (!extra2Expression.TryGetInt(out var extra2))
++            return false;
++
++        if (!compositeExpression.TryGetString(out var compositeString))
++            return false;
++
++        string[] extraData;
++        try
++        {
++            extraData = JsonConvert.DeserializeObject<string[]>(compositeString.ExtractText());
++        }
++        catch
++        {
++            return false;
++        }
++
++        payload = new DalamudLinkPayload()
++        {
++            CommandId = commandId,
++            Plugin = extraData[0],
++            Extra1 = extra1,
++            Extra2 = extra2,
++            ExtraString = extraData[1],
++        };
++
++        return true;
++    }
++}
+diff --git a/Dalamud/Utility/ReadOnlySeStringExtensions.cs b/Dalamud/Utility/ReadOnlySeStringExtensions.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Utility/ReadOnlySeStringExtensions.cs
+@@ -0,0 +1,15 @@
++using Lumina.Text.ReadOnly;
++
++namespace Dalamud.Utility;
++
++/// <summary>
++/// Extension methods for <see cref="ReadOnlySeString"/>.
++/// </summary>
++public static class ReadOnlySeStringExtensions
++{
++    /// <inheritdoc cref="ReadOnlySeStringSpanExtensions.ContainsText(ReadOnlySeStringSpan, ReadOnlySpan{char})"/>
++    public static bool ContainsText(this ReadOnlySeString input, ReadOnlySpan<char> needle)
++    {
++        return input.AsSpan().ContainsText(needle);
++    }
++}
+diff --git a/Dalamud/Utility/ReadOnlySeStringSpanExtensions.cs b/Dalamud/Utility/ReadOnlySeStringSpanExtensions.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Utility/ReadOnlySeStringSpanExtensions.cs
+@@ -0,0 +1,101 @@
++using System.Buffers;
++using System.Text;
++
++using Lumina.Text.ReadOnly;
++
++namespace Dalamud.Utility;
++
++/// <summary>
++/// Extension methods for <see cref="ReadOnlySeStringSpan"/>.
++/// </summary>
++public static class ReadOnlySeStringSpanExtensions
++{
++    /// <summary>
++    /// Determines whether the string contains the specified plain text.
++    /// </summary>
++    /// <param name="input">The string to search.</param>
++    /// <param name="needle">The text to find.</param>
++    /// <returns><see langword="true" /> if the text is found, <see langword="false"/> otherwise.</returns>
++    public static bool ContainsText(this ReadOnlySeStringSpan input, ReadOnlySpan<char> needle)
++    {
++        if (needle.IsEmpty)
++            return true;
++
++        var maxByteCount = Encoding.UTF8.GetMaxByteCount(needle.Length);
++        if (maxByteCount <= 256)
++        {
++            Span<byte> byteBuffer = stackalloc byte[maxByteCount];
++            var actualBytes = System.Text.Encoding.UTF8.GetBytes(needle, byteBuffer);
++            return input.ContainsText(byteBuffer[..actualBytes]);
++        }
++
++        var rented = ArrayPool<byte>.Shared.Rent(maxByteCount);
++        try
++        {
++            var actualBytes = System.Text.Encoding.UTF8.GetBytes(needle, rented);
++            return input.ContainsText(rented.AsSpan(0, actualBytes));
++        }
++        finally
++        {
++            ArrayPool<byte>.Shared.Return(rented);
++        }
++    }
++
++    /// <summary>
++    /// Replaces occurrences of a specified text in a <see cref="ReadOnlySeString"/> with another text.
++    /// </summary>
++    /// <param name="input">The original string.</param>
++    /// <param name="toFind">The text to find.</param>
++    /// <param name="replacement">The replacement text.</param>
++    /// <returns>A new <see cref="ReadOnlySeString"/> with the replacements made.</returns>
++    public static ReadOnlySeString ReplaceText(this ReadOnlySeStringSpan input, ReadOnlySpan<byte> toFind, ReadOnlySpan<byte> replacement)
++    {
++        if (toFind.IsEmpty)
++            throw new ArgumentException("Search text cannot be empty.", nameof(toFind));
++
++        if (input.IsEmpty)
++            return new ReadOnlySeString(input);
++
++        using var rssb = new RentedSeStringBuilder();
++
++        foreach (var payload in input)
++        {
++            if (payload.Type == ReadOnlySePayloadType.Invalid)
++                continue;
++
++            if (payload.Type != ReadOnlySePayloadType.Text)
++            {
++                rssb.Append(payload);
++                continue;
++            }
++
++            var index = payload.Body.IndexOf(toFind);
++            if (index == -1)
++            {
++                rssb.Append(payload);
++                continue;
++            }
++
++            var lastIndex = 0;
++            while (index != -1)
++            {
++                rssb.Append(payload.Body[lastIndex..index]);
++
++                if (!replacement.IsEmpty)
++                {
++                    rssb.Append(replacement);
++                }
++
++                lastIndex = index + toFind.Length;
++                index = payload.Body[lastIndex..].IndexOf(toFind);
++
++                if (index != -1)
++                    index += lastIndex;
++            }
++
++            rssb.Append(payload.Body[lastIndex..]);
++        }
++
++        return rssb.ToReadOnlySeString();
++    }
++}
+diff --git a/Dalamud/Utility/SeStringBuilderExtensions.cs b/Dalamud/Utility/SeStringBuilderExtensions.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Utility/SeStringBuilderExtensions.cs
+@@ -0,0 +1,118 @@
++using Dalamud.Game.Text.SeStringHandling.Payloads;
++
++using Lumina.Excel.Sheets;
++using Lumina.Text;
++using Lumina.Text.Payloads;
++
++using Newtonsoft.Json;
++
++using EmbeddedInfoType = Dalamud.Game.Text.SeStringHandling.Payload.EmbeddedInfoType;
++using SeString = Dalamud.Game.Text.SeStringHandling.SeString;
++
++namespace Dalamud.Utility;
++
++// Note: Do not forget to add forwards to RentedSeStringBuilder.
++
++/// <summary>
++/// Extension methods for SeStringBuilder.
++/// </summary>
++public static class SeStringBuilderExtensions
++{
++    /// <summary>
++    /// Appends a custom Dalamud link macro to the string builder.
++    /// </summary>
++    /// <param name="builder">The builder instance to append to.</param>
++    /// <param name="commandId">The custom command id to trigger upon interaction.</param>
++    /// <param name="pluginName">The internal name of the plugin handling the link.</param>
++    /// <param name="extra1">An optional user-defined integer parameter passed to the click handler.</param>
++    /// <param name="extra2">An optional second user-defined integer parameter passed to the click handler.</param>
++    /// <param name="extraString">An optional user-defined string parameter passed to the click handler.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance for fluent chaining.</returns>
++    public static SeStringBuilder PushDalamudLink(this SeStringBuilder builder, uint commandId, string pluginName, int extra1, int extra2, string extraString)
++    {
++        return builder
++            .BeginMacro(MacroCode.Link)
++            .AppendIntExpression((int)EmbeddedInfoType.DalamudLink)
++            .AppendUIntExpression(commandId)
++            .AppendIntExpression(extra1)
++            .AppendIntExpression(extra2)
++            .BeginStringExpression()
++            .Append(JsonConvert.SerializeObject(new[] { pluginName, extraString }))
++            .EndExpression()
++            .EndMacro();
++    }
++
++    /// <summary>
++    /// Appends a custom Dalamud link macro to the string builder.
++    /// </summary>
++    /// <param name="builder">The builder instance to append to.</param>
++    /// <param name="payload">The link payload containing handler and custom parameter data.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance for fluent chaining.</returns>
++    public static SeStringBuilder PushDalamudLink(this SeStringBuilder builder, DalamudLinkPayload payload)
++    {
++        return PushDalamudLink(builder, payload.CommandId, payload.Plugin, payload.Extra1, payload.Extra2, payload.ExtraString);
++    }
++
++    /// <summary>
++    /// Appends a formatted item link payload using a combined raw item Id.
++    /// </summary>
++    /// <param name="builder">The builder to append the item link to.</param>
++    /// <param name="itemId">The Id of the Item or EventItem to link. Automatically extracted into its base Id and <see cref="ItemKind"/>.</param>
++    /// <param name="displayNameOverride">An optional name override to display instead of the actual item name.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance with the item link appended for method chaining.</returns>
++    public static SeStringBuilder PushItemLink(this SeStringBuilder builder, uint itemId, string? displayNameOverride = null)
++    {
++        var (baseItemId, itemKind) = ItemUtil.GetBaseId(itemId);
++        return builder.Append(SeString.CreateItemLink(baseItemId, itemKind, displayNameOverride));
++    }
++
++    /// <summary>
++    /// Appends a formatted item link payload.
++    /// </summary>
++    /// <param name="builder">The builder to append the item link to.</param>
++    /// <param name="baseItemId">The base Id of the item to link.</param>
++    /// <param name="itemKind">The <see cref="ItemKind"/> variant of the item (e.g., normal, high-quality, collectable).</param>
++    /// <param name="displayNameOverride">An optional name override to display instead of the actual item name.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance with the item link appended for method chaining.</returns>
++    public static SeStringBuilder PushItemLink(this SeStringBuilder builder, uint baseItemId, ItemKind itemKind, string? displayNameOverride = null)
++    {
++        return builder.Append(SeString.CreateItemLink(baseItemId, itemKind, displayNameOverride));
++    }
++
++    /// <summary>
++    /// Appends a formatted item link payload.
++    /// </summary>
++    /// <param name="builder">The builder to append the item link to.</param>
++    /// <param name="item">The Lumina <see cref="Item"/> data object to link.</param>
++    /// <param name="isHq">Whether to link the high-quality variant of the item.</param>
++    /// <param name="displayNameOverride">An optional name override to display instead of the actual item name.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance with the item link appended for method chaining.</returns>
++    public static SeStringBuilder PushItemLink(this SeStringBuilder builder, Item item, bool isHq, string? displayNameOverride = null)
++    {
++        return builder.Append(SeString.CreateItemLink(item, isHq, displayNameOverride));
++    }
++
++    /// <summary>
++    /// Appends a formatted party finder listing link payload.
++    /// </summary>
++    /// <param name="builder">The builder to append the party finder link to.</param>
++    /// <param name="listingId">The listing Id of the party finder entry.</param>
++    /// <param name="recruiterName">The name of the recruiter.</param>
++    /// <param name="isCrossWorld">Whether the listing is limited to the current world or not.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance with the party finder link appended for method chaining.</returns>
++    public static SeStringBuilder PushPartyFinderLink(this SeStringBuilder builder, uint listingId, string recruiterName, bool isCrossWorld = false)
++    {
++        return builder.Append(SeString.CreatePartyFinderLink(listingId, recruiterName, isCrossWorld));
++    }
++
++    /// <summary>
++    /// Appends a formatted party finder search conditions link payload.
++    /// </summary>
++    /// <param name="builder">The builder to append the search conditions link to.</param>
++    /// <param name="message">The text that should be displayed for the link.</param>
++    /// <returns>The <see cref="SeStringBuilder"/> instance with the search conditions link appended for method chaining.</returns>
++    public static SeStringBuilder PushPartyFinderSearchConditionsLink(this SeStringBuilder builder, string message)
++    {
++        return builder.Append(SeString.CreatePartyFinderSearchConditionsLink(message));
++    }
++}
+diff --git a/Dalamud/Utility/Util.cs b/Dalamud/Utility/Util.cs
+--- a/Dalamud/Utility/Util.cs
++++ b/Dalamud/Utility/Util.cs
+@@ -45,6 +45,7 @@
+ /// </summary>
+ public static partial class Util
+ {
++    private static readonly string[] ByteSuffixes = ["B", "KB", "MB", "GB", "TB"];
+     private static readonly string[] PageProtectionFlagNames = [
+         "PAGE_NOACCESS",
+         "PAGE_READONLY",
+@@ -378,15 +379,14 @@
+     /// <returns>Human readable version.</returns>
+     public static string FormatBytes(ulong bytes)
+     {
+-        string[] suffix = ["B", "KB", "MB", "GB", "TB"];
+         int i;
+         double dblSByte = bytes;
+-        for (i = 0; i < suffix.Length && bytes >= 1024; i++, bytes /= 1024)
++        for (i = 0; i < ByteSuffixes.Length && bytes >= 1024; i++, bytes /= 1024)
+         {
+             dblSByte = bytes / 1024.0;
+         }
+ 
+-        return $"{dblSByte:0.00} {suffix[i]}";
++        return $"{dblSByte:0.00} {ByteSuffixes[i]}";
+     }
+ 
+     /// <summary>
+diff --git a/Directory.Packages.props b/Directory.Packages.props
+--- a/Directory.Packages.props
++++ b/Directory.Packages.props
+@@ -40,7 +40,7 @@
+     <PackageVersion Include="HexaGen.Runtime" Version="1.1.20" />
+ 
+     <!-- Reloaded -->
+-    <PackageVersion Include="goatcorp.Reloaded.Hooks" Version="4.2.1" />
++    <PackageVersion Include="goatcorp.Reloaded.Hooks" Version="4.2.2" />
+     <PackageVersion Include="Reloaded.Memory" Version="7.0.0" />
+     <PackageVersion Include="Reloaded.Memory.Buffers" Version="2.0.0" />
+ 

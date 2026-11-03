@@ -1,0 +1,287 @@
+diff --git a/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs b/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
+--- a/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
++++ b/Dalamud/Plugin/Internal/AutoUpdate/AutoUpdateManager.cs
+@@ -72,6 +72,8 @@
+ 
+     private readonly Task<DalamudLinkPayload> openInstallerWindowLinkTask;
+ 
++    private readonly PeriodicUpdateCheck periodicUpdateCheck = new();
++
+     private DateTime? loginTime;
+     private DateTime? nextUpdateCheckTime;
+     private DateTime? unblockedSince;
+@@ -81,6 +83,8 @@
+     private IActiveNotification? updateNotification;
+ 
+     private Task? autoUpdateTask;
++
++    private bool periodicUpdateResultPending;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="AutoUpdateManager"/> class.
+@@ -171,6 +175,15 @@
+ 
+     private void OnUpdate(IFramework framework)
+     {
++        // Consume asynchronous work on the framework thread, including errors after logout.
++        if (this.periodicUpdateCheck.TryComplete(out var reloadError))
++        {
++            if (reloadError != null)
++                Log.Error(reloadError, "Failed to reload plugin masters for auto-update");
++            else
++                this.periodicUpdateResultPending = this.loginTime != null;
++        }
++
+         if (this.loginTime == null)
+             return;
+ 
+@@ -237,39 +250,32 @@
+             return;
+         }
+ 
++        // Keep completed results until it is appropriate to show a notification again.
++        if (this.periodicUpdateResultPending)
++        {
++            this.periodicUpdateResultPending = false;
++            if (this.config.CheckPeriodicallyForUpdates && this.updateNotification == null)
++            {
++                var updatable = this.GetAvailablePluginUpdates(DecideUpdateListingRestriction(behavior));
++                if (updatable.Count > 0)
++                    this.NotifyUpdatesAreAvailable(updatable);
++            }
++
++            return;
++        }
++
+         // 2. Continuously check for updates while the game is running. We run these every once in a while and
+         //    will only show a notification here that lets people start the update or open the installer.
+         if (this.config.CheckPeriodicallyForUpdates &&
+             this.nextUpdateCheckTime != null &&
+             DateTime.Now > this.nextUpdateCheckTime &&
+-            this.updateNotification == null)
++            this.updateNotification == null &&
++            !this.periodicUpdateCheck.IsPending)
+         {
+             Log.Verbose("Starting periodic update check");
+-            this.pluginManager.ReloadAllReposAsync()
+-                .ContinueWith(
+-                    t =>
+-                    {
+-                        if (t.IsFaulted || t.IsCanceled)
+-                        {
+-                            Log.Error(t.Exception!, "Failed to reload plugin masters for auto-update");
+-                        }
+-
+-                        Log.Verbose($"Available Updates: {string.Join(", ", this.pluginManager.UpdatablePlugins.Select(s => s.UpdateManifest.InternalName))}");
+-                        var updatable = this.GetAvailablePluginUpdates(
+-                            DecideUpdateListingRestriction(behavior));
+-
+-                        if (updatable.Count > 0)
+-                        {
+-                            this.NotifyUpdatesAreAvailable(updatable);
+-                        }
+-                        else
+-                        {
+-                            this.nextUpdateCheckTime = DateTime.Now + TimeBetweenUpdateChecks;
+-                            Log.Verbose(
+-                                "Auto update found nothing to do, next update at {Time}",
+-                                this.nextUpdateCheckTime);
+-                        }
+-                    });
++            // Reserve the next slot before starting I/O, including synchronous failures.
++            this.nextUpdateCheckTime = DateTime.Now + TimeBetweenUpdateChecks;
++            this.periodicUpdateCheck.TryStart(() => this.pluginManager.ReloadAllReposAsync());
+         }
+     }
+ 
+@@ -278,17 +284,22 @@
+         if (this.updateNotification != null)
+             throw new InvalidOperationException("Already showing a notification");
+ 
+-        this.updateNotification = this.notificationManager.AddNotification(notification);
+-
+-        this.updateNotification.Dismiss += _ =>
+-        {
++        var activeNotification = this.notificationManager.AddNotification(notification);
++        this.updateNotification = activeNotification;
++
++        activeNotification.Dismiss += _ =>
++        {
++            // An older notification may finish dismissing after a replacement was created.
++            if (!ReferenceEquals(this.updateNotification, activeNotification))
++                return;
++
+             this.updateNotification = null;
+ 
+             // Schedule the next update opportunistically for when this closes.
+             this.nextUpdateCheckTime = DateTime.Now + TimeBetweenUpdateChecks;
+         };
+ 
+-        return this.updateNotification!;
++        return activeNotification;
+     }
+ 
+     private void KickOffAutoUpdates(ICollection<AvailablePluginUpdate> updatablePlugins, IActiveNotification? notification = null)
+@@ -379,7 +390,7 @@
+ 
+     private void NotifyUpdatesAreAvailable(List<AvailablePluginUpdate> updatablePlugins)
+     {
+-        if (updatablePlugins.Count == 0)
++        if (updatablePlugins.Count == 0 || this.updateNotification != null)
+             return;
+ 
+         var notification = this.GetBaseNotification(new Notification
+@@ -485,6 +496,7 @@
+     private void OnLogout()
+     {
+         this.loginTime = null;
++        this.periodicUpdateResultPending = false;
+     }
+ 
+     private bool CanUpdateOrNag()
+diff --git a/Dalamud/Plugin/Internal/AutoUpdate/PeriodicUpdateCheck.cs b/Dalamud/Plugin/Internal/AutoUpdate/PeriodicUpdateCheck.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud/Plugin/Internal/AutoUpdate/PeriodicUpdateCheck.cs
+@@ -0,0 +1,56 @@
++using System.Threading.Tasks;
++
++namespace Dalamud.Plugin.Internal.AutoUpdate;
++
++/// <summary>
++/// Owns one repository refresh until its result is consumed by the framework thread.
++/// </summary>
++internal sealed class PeriodicUpdateCheck
++{
++    private Task? pending;
++
++    /// <summary>Gets a value indicating whether a refresh or its unconsumed result exists.</summary>
++    public bool IsPending => this.pending != null;
++
++    /// <summary>Starts a refresh if the previous result has been consumed.</summary>
++    /// <param name="reload">The repository refresh operation.</param>
++    /// <returns>Whether a new refresh was started.</returns>
++    public bool TryStart(Func<Task> reload)
++    {
++        if (this.pending != null)
++            return false;
++
++        try
++        {
++            this.pending = reload();
++        }
++        catch (Exception ex)
++        {
++            this.pending = Task.FromException(ex);
++        }
++
++        return true;
++    }
++
++    /// <summary>Consumes a completed refresh exactly once, without blocking or scheduling a callback.</summary>
++    /// <param name="error">The observed refresh error, if any.</param>
++    /// <returns>Whether a completed result was consumed.</returns>
++    public bool TryComplete(out Exception? error)
++    {
++        error = null;
++        if (this.pending is not { IsCompleted: true } completed)
++            return false;
++
++        this.pending = null;
++        try
++        {
++            completed.GetAwaiter().GetResult();
++        }
++        catch (Exception ex)
++        {
++            error = ex;
++        }
++
++        return true;
++    }
++}
+diff --git a/Dalamud.Test/Plugin/PeriodicUpdateCheckTests.cs b/Dalamud.Test/Plugin/PeriodicUpdateCheckTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Plugin/PeriodicUpdateCheckTests.cs
+@@ -0,0 +1,80 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++using Dalamud.Plugin.Internal.AutoUpdate;
++
++using Xunit;
++
++namespace Dalamud.Test.Plugin;
++
++public class PeriodicUpdateCheckTests
++{
++    [Fact]
++    public void SlowRefreshAcrossManyFramesProducesOnlyOneResult()
++    {
++        var check = new PeriodicUpdateCheck();
++        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
++        var requests = 0;
++        Task Reload() { requests++; return completion.Task; }
++
++        Assert.True(check.TryStart(Reload));
++        for (var frame = 0; frame < 600; frame++)
++        {
++            Assert.False(check.TryStart(Reload));
++            Assert.False(check.TryComplete(out _));
++        }
++
++        completion.SetResult();
++        Assert.True(check.IsPending);
++        Assert.False(check.TryStart(Reload));
++        Assert.True(check.TryComplete(out var error));
++        Assert.Null(error);
++        Assert.Equal(1, requests);
++        for (var frame = 0; frame < 600; frame++)
++            Assert.False(check.TryComplete(out _));
++        Assert.False(check.IsPending);
++        Assert.True(check.TryStart(() => Task.CompletedTask));
++        Assert.True(check.TryComplete(out error));
++        Assert.Null(error);
++    }
++
++    [Fact]
++    public void CompletedRefreshWaitsForConsumerBeforeAnotherCanStart()
++    {
++        var check = new PeriodicUpdateCheck();
++        Assert.True(check.TryStart(() => Task.CompletedTask));
++        Assert.False(check.TryStart(() => throw new Exception("Must not start again")));
++        Assert.True(check.TryComplete(out var error));
++        Assert.Null(error);
++        Assert.False(check.TryComplete(out _));
++    }
++
++    [Theory]
++    [InlineData(false)]
++    [InlineData(true)]
++    public void FailedRefreshIsObservedOnceAndAllowsLaterRetry(bool synchronous)
++    {
++        var check = new PeriodicUpdateCheck();
++        var failure = new InvalidOperationException("Repository unavailable");
++        Assert.True(check.TryStart(() => synchronous ? throw failure : Task.FromException(failure)));
++        Assert.False(check.TryStart(() => Task.CompletedTask));
++        Assert.True(check.TryComplete(out var error));
++        Assert.Same(failure, error);
++        Assert.False(check.TryComplete(out _));
++        Assert.True(check.TryStart(() => Task.CompletedTask));
++        Assert.True(check.TryComplete(out error));
++        Assert.Null(error);
++    }
++
++    [Fact]
++    public void CancelledRefreshIsObservedWithoutProducingASuccessResult()
++    {
++        var check = new PeriodicUpdateCheck();
++        Assert.True(check.TryStart(() => Task.FromCanceled(new CancellationToken(true))));
++        Assert.True(check.TryComplete(out var error));
++        Assert.IsAssignableFrom<OperationCanceledException>(error);
++        Assert.False(check.TryComplete(out _));
++        Assert.False(check.IsPending);
++    }
++}

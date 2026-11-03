@@ -1,0 +1,83 @@
+diff --git a/Dalamud.Test/Game/BeastmasterCompatibilityTests.cs b/Dalamud.Test/Game/BeastmasterCompatibilityTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Game/BeastmasterCompatibilityTests.cs
+@@ -0,0 +1,78 @@
++using System;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++
++using FFXIVClientStructs.FFXIV.Client.Game;
++using FFXIVClientStructs.FFXIV.Client.Game.Gauge;
++using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
++
++using Xunit;
++
++namespace Dalamud.Test.Game;
++
++public sealed class BeastmasterCompatibilityTests
++{
++    [Fact]
++    public void GaugeReadsPackedStateFromTheExpectedNativeBytes()
++    {
++        var gauge = new BeastmasterGauge();
++        var bytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref gauge, 1));
++        bytes[0x08] = 250;
++        bytes[0x09] = 100;
++        bytes[0x0B] = 3;
++        bytes[0x0D] = 6;
++        Assert.Equal((byte)250, gauge.TPGauge);
++        Assert.Equal((byte)100, gauge.PetTPGauge);
++        Assert.Equal((byte)3, gauge.ActiveBattlehorn);
++        Assert.Equal(BeastmasterAffinity.Moonstalker, gauge.CurrentAffinity);
++        for (var value = 0; value < 256; value++)
++        {
++            bytes[0x0F] = (byte)value;
++            bytes[0x10] = (byte)value;
++            Assert.Equal((byte)(value & 15), gauge.KinshipBattlehorn);
++            Assert.Equal((byte)(value >> 4), gauge.KinshipClassification);
++            Assert.Equal((byte)(value & 3), gauge.NaturalInstinct);
++            Assert.Equal((byte)((value >> 2) & 3), gauge.MasteredInstinct);
++        }
++    }
++
++    [Fact]
++    public void CrucibleInventoryUsesTenTwelveByteSlots()
++    {
++        var content = new InstanceContentCrucibleOfTheUnbroken();
++        var bytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref content, 1));
++        Assert.Equal(10, content.Inventory.Length);
++        for (var slot = 0; slot < content.Inventory.Length; slot++)
++        {
++            var offset = 0x2380 + (slot * 0x0C) + 4;
++            bytes[offset] = (byte)(slot + 1);
++            bytes[offset + 1] = 1;
++            Assert.Equal((ushort)(257 + slot), content.Inventory[slot].ItemId);
++        }
++    }
++
++    [Fact]
++    public void AddedTypesDoNotExpandExistingCnGaugeOrContentBases()
++    {
++        Assert.Equal(0x18, Unsafe.SizeOf<BeastmasterGauge>());
++        Assert.Equal(0x60, Unsafe.SizeOf<JobGaugeManager>());
++        Assert.Equal(0x1F98, Unsafe.SizeOf<InstanceContentDirector>());
++        Assert.Equal(0x25A0, Unsafe.SizeOf<InstanceContentCrucibleOfTheUnbroken>());
++        Assert.Equal(0x0C, Unsafe.SizeOf<InstanceContentCrucibleOfTheUnbroken.InventorySlot>());
++        var field = typeof(InstanceContentCrucibleOfTheUnbroken).GetField("InstanceContentType")!;
++        Assert.Equal(0xDCE, field.GetCustomAttribute<FieldOffsetAttribute>()!.Value);
++    }
++
++    [Fact]
++    public void CrucibleUseItemExposesTheDelegateAndAddressExpectedByPlugins()
++    {
++        var invoke = typeof(InstanceContentCrucibleOfTheUnbroken.Delegates.UseItem).GetMethod("Invoke")!;
++        Assert.Equal(typeof(void), invoke.ReturnType);
++        Assert.Collection(invoke.GetParameters(),
++                          p => Assert.Equal(typeof(InstanceContentCrucibleOfTheUnbroken).MakePointerType(), p.ParameterType),
++                          p => Assert.Equal(typeof(uint), p.ParameterType),
++                          p => Assert.Equal(typeof(int), p.ParameterType));
++        Assert.NotNull(InstanceContentCrucibleOfTheUnbroken.Addresses.UseItem);
++    }
++}

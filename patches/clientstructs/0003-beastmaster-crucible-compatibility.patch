@@ -1,0 +1,65 @@
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/Gauge/BeastmasterGauge.cs b/FFXIVClientStructs/FFXIV/Client/Game/Gauge/BeastmasterGauge.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/FFXIV/Client/Game/Gauge/BeastmasterGauge.cs
+@@ -0,0 +1,33 @@
++namespace FFXIVClientStructs.FFXIV.Client.Game.Gauge;
++
++// Backported from aers/FFXIVClientStructs d9249787 and 39d9aa19.
++// Kept separate so existing CN gauge and manager layouts are unchanged.
++[GenerateInterop]
++[Inherits<JobGauge>]
++[StructLayout(LayoutKind.Explicit, Size = 0x18)]
++public partial struct BeastmasterGauge {
++    [FieldOffset(0x08)] public byte TPGauge;
++    [FieldOffset(0x09)] public byte PetTPGauge;
++    [FieldOffset(0x0A)] public byte PetTPAtLastUse;
++    [FieldOffset(0x0B)] public byte ActiveBattlehorn;
++    [FieldOffset(0x0C)] public byte InstinctualComboState;
++    [FieldOffset(0x0D)] public BeastmasterAffinity CurrentAffinity;
++    [FieldOffset(0x0E)] public byte ChainCount;
++    /// <remarks>XBMPet.Classification is Addon row 17740 + Classification.</remarks>
++    [BitField<byte>(nameof(KinshipBattlehorn), 0, 4)]
++    [BitField<byte>(nameof(KinshipClassification), 4, 4)]
++    [FieldOffset(0x0F)] public byte KinshipState;
++    [BitField<byte>(nameof(NaturalInstinct), 0, 2)]
++    [BitField<byte>(nameof(MasteredInstinct), 2, 2)]
++    [FieldOffset(0x10)] public byte InstinctState;
++}
++
++public enum BeastmasterAffinity : byte {
++    None = 0,
++    Volant = 1,
++    Rampant = 2,
++    Durant = 3,
++    Eldritch = 4,
++    Sunstrider = 5,
++    Moonstalker = 6,
++}
+diff --git a/FFXIVClientStructs/FFXIV/Client/Game/InstanceContent/InstanceContentCrucibleOfTheUnbroken.cs b/FFXIVClientStructs/FFXIV/Client/Game/InstanceContent/InstanceContentCrucibleOfTheUnbroken.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/FFXIV/Client/Game/InstanceContent/InstanceContentCrucibleOfTheUnbroken.cs
+@@ -0,0 +1,22 @@
++namespace FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
++
++// Backported from aers/FFXIVClientStructs 4884d5a1.
++// Uses the existing CN InstanceContentDirector base layout.
++[GenerateInterop]
++[Inherits<InstanceContentDirector>]
++[StructLayout(LayoutKind.Explicit, Size = 0x25A0)]
++public partial struct InstanceContentCrucibleOfTheUnbroken {
++    [FieldOffset(0x2380), FixedSizeArray] internal FixedSizeArray10<InventorySlot> _inventory;
++
++    [StructLayout(LayoutKind.Explicit, Size = 0x0C)]
++    public struct InventorySlot {
++        [FieldOffset(0x04)] public ushort ItemId;
++    }
++
++    /// <summary>Uses a Crucible item.</summary>
++    /// <remarks>If applicable, the item action will be used on the player's current soft or hard target.</remarks>
++    /// <param name="slot">Crucible inventory index (0-9).</param>
++    /// <param name="beastId">Beast ID (XBMPet row). Only applicable for the Blessed Horn item.</param>
++    [MemberFunction("E8 ?? ?? ?? ?? 83 7F 44 00 48 8D 57 44")]
++    public partial void UseItem(uint slot, int beastId);
++}

@@ -42,6 +42,15 @@ internal static class StandaloneApplication
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length == 2 && args[0] == "verify-bundle")
+        {
+            var verificationPaths = StandalonePaths.ForRoot(args[1]);
+            var verifiedConfiguration = DistributionBootstrap.Prepare(verificationPaths);
+            CoreProfileInitializer.EnsureCreated(verificationPaths);
+            var result = new PayloadValidator(verificationPaths).Validate(verifiedConfiguration);
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { version = UpdateService.CurrentVersion, bundled = DistributionBootstrap.IsBundled, result.IsValid, result.Errors }));
+            return DistributionBootstrap.IsBundled && result.IsValid ? 0 : 2;
+        }
         if (args[0] is "help" or "--help" or "-h")
         {
             Console.WriteLine("Moonwake\n  prepare\n  init\n  status\n  inject --pid <PID> [--research] [--no-plugins]\n  help");

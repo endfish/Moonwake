@@ -12,7 +12,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
-    <Version>0.1.1-preview.4</Version>
+    <Version>0.2.0-preview.1</Version>
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <PathMap>$(MSBuildProjectDirectory)=/_/Moonwake</PathMap>
     <Authors>Endfish</Authors>
     <Product>Moonwake</Product>
     <Description>Independent Dalamud injection tool for the CN FFXIV client.</Description>

@@ -1,0 +1,471 @@
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontManager.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontManager.cs
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontManager.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontManager.cs
+@@ -7,7 +7,8 @@
+ [GenerateInterop]
+ [StructLayout(LayoutKind.Explicit, Size = 0x90)]
+ public unsafe partial struct AtkFontManager {
+-    [FieldOffset(0x08)] public Font* Fonts; // 41 * 0xF0
++    [FieldOffset(0x00)] public FontSet* FontSets;
++    [FieldOffset(0x08)] public Font* Fonts;
+     [FieldOffset(0x10)] public ushort FontCount;
+     [FieldOffset(0x18)] public GfdFont* Gfd;
+     [FieldOffset(0x20)] public AtkFontCodeModule* AtkFontCodeModule;
+@@ -18,16 +19,139 @@
+     [FieldOffset(0x40)] public Icon2RemapEntry* Icon2RemapTable; // 30 * 0x08
+     [FieldOffset(0x50)] public uint SetupState;
+ 
++    public const int FontSetCount = 6;
++    public Span<FontSet> FontSetSpan => FontSets is null ? Span<FontSet>.Empty : new(FontSets, FontSetCount);
++    public Span<Font> FontSpan => Fonts is null ? Span<Font>.Empty : new(Fonts, FontCount);
++
++    [MemberFunction("40 56 48 83 EC 60 66 3B 51 10 0F 83 ?? ?? ?? ?? 0F B7 C2 48 69 F0 ?? ?? ?? ??")]
++    public partial int BuildFont(ushort index);
++
++    [MemberFunction("E8 ?? ?? ?? ?? 48 8B CF 4C 89 BF ?? ?? ?? ?? E8")]
++    public partial int UnloadFonts();
++
++    // CN's selector loads the high-resolution lobby table before the standard-resolution table.
++    [StaticAddress("48 8D 05 ?? ?? ?? ?? 48 8D 1D ?? ?? ?? ?? 48 0F 45 D8 EB 07 48 8D 1D ?? ?? ?? ??", 23)]
++    public static partial FontTableEntry* GameFontTable();
++
++    [StaticAddress("48 8D 05 ?? ?? ?? ?? 48 8D 1D ?? ?? ?? ?? 48 0F 45 D8 EB 07 48 8D 1D ?? ?? ?? ??", 10)]
++    public static partial FontTableEntry* LobbyFontTableStandardResolution();
++
++    [StaticAddress("48 8D 05 ?? ?? ?? ?? 48 8D 1D ?? ?? ?? ?? 48 0F 45 D8 EB 07 48 8D 1D ?? ?? ?? ??", 3)]
++    public static partial FontTableEntry* LobbyFontTableHighResolution();
++
+     [GenerateInterop]
+-    [StructLayout(LayoutKind.Explicit, Size = 0xF0)]
+-    public unsafe partial struct Font {
+-        [FieldOffset(0x00), FixedSizeArray] internal FixedSizeArray10<Pointer<TextureResourceHandle>> _textureResourceHandles;
+-        [FieldOffset(0x58), FixedSizeArray] internal FixedSizeArray10<Pointer<Texture>> _textures;
+-        [FieldOffset(0xE8)] public ushort TextureCount;
++    [StructLayout(LayoutKind.Explicit, Size = 0x1A8)]
++    public partial struct Font {
++        // CN reserves 21 texture slots in each array rather than the global client's 10.
++        public const int MaxTextures = 21;
++
++        [FieldOffset(0x00), FixedSizeArray] internal FixedSizeArray21<Pointer<TextureResourceHandle>> _textureResourceHandles;
++        [FieldOffset(0xA8)] public ResourceHandle* FontdataResourceHandle;
++        [FieldOffset(0xB0), FixedSizeArray] internal FixedSizeArray21<Pointer<Texture>> _textures;
++        [FieldOffset(0x158)] public uint GlyphCount;
++        [FieldOffset(0x15C)] public uint KerningCount;
++        [FieldOffset(0x164)] public ushort TextureWidth;
++        [FieldOffset(0x166)] public ushort TextureHeight;
++        [FieldOffset(0x168)] public float Size;
++        [FieldOffset(0x16C)] public int LineHeight;
++        [FieldOffset(0x170)] public int Ascent;
++        [FieldOffset(0x178)] public Glyph* Glyphs;
++        [FieldOffset(0x180)] public StdUnorderedMap<uint, Pointer<Glyph>>* GlyphMap;
++        [FieldOffset(0x188)] public KerningEntry* Kerning;
++        [FieldOffset(0x190)] public Font* Secondary;
++        [FieldOffset(0x198)] public float SecondaryRatio;
++        [FieldOffset(0x1A0)] public ushort TextureCount;
++        [FieldOffset(0x1A2)] public FontFlags Flags;
++        /// <summary>The first codepoint of the glyphs looked up by index rather than in <see cref="GlyphMap"/>, up to 0xFF, when <see cref="FontFlags.DirectIndex"/> is set.</summary>
++        [FieldOffset(0x1A3)] public byte DirectIndexFirst;
++        /// <summary>How far the glyph after italic text moves right, for the overhang of the sheared glyphs before it.</summary>
++        [FieldOffset(0x1A4)] public sbyte ItalicCorrection;
++        /// <summary>Extra spacing between consecutive CJK glyphs.</summary>
++        [FieldOffset(0x1A5)] public sbyte CjkSpacing;
++    }
++
++    [Flags]
++    public enum FontFlags : byte {
++        Built = 1 << 0,
++        Ready = 1 << 1,
++        DirectIndex = 1 << 2,
++    }
++
++    /// <summary> The fonts of one <see cref="FontType"/>, and the state of the text being drawn with them. </summary>
++    [GenerateInterop]
++    [StructLayout(LayoutKind.Explicit, Size = 0x278)]
++    public partial struct FontSet {
++        [FieldOffset(0x12C)] public float ScaledSizeY;
++        [FieldOffset(0x130)] public float NodeScaleX;
++        [FieldOffset(0x134)] public float NodeScaleY;
++        [FieldOffset(0x158)] public DrawFlags DrawFlags;
++        [FieldOffset(0x250)] public Font* CurrentFont;
++        [FieldOffset(0x258)] public float CurrentFontSize;
++
++        /// <summary>Picks the font of the set for the requested size.</summary>
++        [MemberFunction("83 B9 58 01 00 00 00 4C 8B C1 F3 0F 10 91 2C 01 00 00")]
++        public partial Font* PickFont(bool useCache);
++
++        /// <summary>Looks a glyph up in a font of the set.</summary>
++        /// <returns><c>null</c> if the font has none.</returns>
++        [MemberFunction("89 54 24 10 48 83 EC 38 41 F6 80 ?? ?? ?? ?? 04")]
++        public partial Glyph* GetGlyph(uint utf8Value, Font* font);
++    }
++
++    [Flags]
++    public enum DrawFlags : uint {
++        Italic = 1 << 27,
++    }
++
++    [GenerateInterop]
++    [StructLayout(LayoutKind.Explicit, Size = 0x0C)]
++    public partial struct Glyph {
++        [FieldOffset(0x00)] public uint Utf8Value; // imagine a UTF-8 byte sequence, reverse it, and pad before with zeroes
++        [BitField<int>(nameof(X), 0, 12)]
++        [BitField<int>(nameof(Y), 12, 12)]
++        [BitField<int>(nameof(Channel), 24, 2)]
++        [BitField<int>(nameof(TextureIndex), 26, 6)]
++        [FieldOffset(0x04)] private uint _packed;
++        [FieldOffset(0x08)] public byte Width;
++        [FieldOffset(0x09)] public byte Height;
++        [FieldOffset(0x0A)] public sbyte OffsetX;
++        [FieldOffset(0x0B)] public sbyte OffsetY;
++
++
++        public (int X, int Y, int Channel, int TextureIndex) Packed {
++            readonly get => (X, Y, Channel, TextureIndex);
++            set {
++                ArgumentOutOfRangeException.ThrowIfLessThan(value.X, 0);
++                ArgumentOutOfRangeException.ThrowIfGreaterThan(value.X, 0xFFF);
++                ArgumentOutOfRangeException.ThrowIfLessThan(value.Y, 0);
++                ArgumentOutOfRangeException.ThrowIfGreaterThan(value.Y, 0xFFF);
++                ArgumentOutOfRangeException.ThrowIfLessThan(value.Channel, 0);
++                ArgumentOutOfRangeException.ThrowIfGreaterThan(value.Channel, 3);
++                ArgumentOutOfRangeException.ThrowIfLessThan(value.TextureIndex, 0);
++                ArgumentOutOfRangeException.ThrowIfGreaterThan(value.TextureIndex, 0x3F);
++                _packed = (uint)(value.X & 0xFFF) | ((uint)(value.Y & 0xFFF) << 12) | ((uint)(value.Channel & 3) << 24) | ((uint)value.TextureIndex << 26);
++            }
++        }
++    }
++
++    [StructLayout(LayoutKind.Explicit, Size = 0x0C)]
++    public struct KerningEntry {
++        [FieldOffset(0x00)] public uint Left;
++        [FieldOffset(0x04)] public uint Right;
++        [FieldOffset(0x08)] public int Adjustment;
++    }
++
++    [StructLayout(LayoutKind.Explicit, Size = 0x18)]
++    public struct FontTableEntry {
++        public const int Count = 41;
++
++        [FieldOffset(0x00)] public ulong TextureCount;
++        [FieldOffset(0x08)] public CStringPointer TextureNameFormat;
++        [FieldOffset(0x10)] public CStringPointer FdtName;
+     }
+ 
+     [StructLayout(LayoutKind.Explicit, Size = 0x30)]
+-    public unsafe struct GfdFont {
++    public struct GfdFont {
+         [FieldOffset(0x00)] public TextureResourceHandle* TextureResourceHandle;
+         // TODO: use GaijiFontdataResourceHandle*
+         [FieldOffset(0x08)] private ResourceHandle* GfdResourceHandle; // probably only available during setup, because it's null afterwards
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzer.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzer.cs
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzer.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzer.cs
+@@ -1,15 +1,16 @@
+ namespace FFXIVClientStructs.FFXIV.Component.GUI;
+ 
+-[StructLayout(LayoutKind.Explicit, Size = 0x980)]
++[StructLayout(LayoutKind.Explicit, Size = 0xDA0)]
+ public unsafe struct AtkFontAnalyzer {
+     [FieldOffset(0x008)] public AtkFontAnalyzerCount AtkFontAnalyzerCount;
+     [FieldOffset(0x078)] public AtkFontAnalyzerDrawSize AtkFontAnalyzerDrawSize;
+-    [FieldOffset(0x638)] public AtkFontAnalyzerSearchPosition AtkFontAnalyzerSearchPosition;
+-    [FieldOffset(0x6F0)] public AtkFontAnalyzerCRLFCount AtkFontAnalyzerCRLFCount;
+-    [FieldOffset(0x758)] public AtkFontAnalyzerCRLFSearch AtkFontAnalyzerCRLFSearch;
+-    [FieldOffset(0x7C8)] public AtkFontAnalyzerBuildLink AtkFontAnalyzerBuildLink;
+-    [FieldOffset(0x880)] public AtkFontAnalyzerCreateCache AtkFontAnalyzerCreateCache;
+-    [FieldOffset(0x8F0)] public AtkFontAnalyzerCheckStringOnlyNumSymbol AtkFontAnalyzerCheckStringOnlyNumSymbol;
+-    [FieldOffset(0x958)] public AtkFontAnalyzerFunctor AtkFontAnalyzerFunctor;
+-    [FieldOffset(0x960)] public AtkFontAnalyzerFunctorSelect AtkFontAnalyzerFunctorSelect;
++    // CN's renderer uses the larger 21-texture buffers, shifting the following analyzers.
++    [FieldOffset(0xA58)] public AtkFontAnalyzerSearchPosition AtkFontAnalyzerSearchPosition;
++    [FieldOffset(0xB10)] public AtkFontAnalyzerCRLFCount AtkFontAnalyzerCRLFCount;
++    [FieldOffset(0xB78)] public AtkFontAnalyzerCRLFSearch AtkFontAnalyzerCRLFSearch;
++    [FieldOffset(0xBE8)] public AtkFontAnalyzerBuildLink AtkFontAnalyzerBuildLink;
++    [FieldOffset(0xCA0)] public AtkFontAnalyzerCreateCache AtkFontAnalyzerCreateCache;
++    [FieldOffset(0xD10)] public AtkFontAnalyzerCheckStringOnlyNumSymbol AtkFontAnalyzerCheckStringOnlyNumSymbol;
++    [FieldOffset(0xD78)] public AtkFontAnalyzerFunctor AtkFontAnalyzerFunctor;
++    [FieldOffset(0xD80)] public AtkFontAnalyzerFunctorSelect AtkFontAnalyzerFunctorSelect;
+ }
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderCount.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderCount.cs
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderCount.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderCount.cs
+@@ -4,5 +4,6 @@
+ //   Component::GUI::AtkFontAnalyzerBase
+ [GenerateInterop]
+ [Inherits<AtkFontAnalyzerBase>]
+-[StructLayout(LayoutKind.Explicit, Size = 0x130)]
++[StructLayout(LayoutKind.Explicit, Size = 0x1E0)]
++[VirtualTable("48 8D 05 ?? ?? ?? ?? 48 89 83 18 01 00 00 48 8D 05 ?? ?? ?? ?? 48 89 BB ?? ?? ?? ??", 17)]
+ public partial struct AtkFontAnalyzerRenderCount;
+diff --git a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderer.cs b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderer.cs
+--- a/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderer.cs
++++ b/FFXIVClientStructs/FFXIV/Component/GUI/AtkFontAnalyzerRenderer.cs
+@@ -5,7 +5,8 @@
+ //   Component::GUI::AtkFontAnalyzerRenderCount
+ [GenerateInterop]
+ [Inherits<AtkFontAnalyzerBase>]
+-[StructLayout(LayoutKind.Explicit, Size = 0x520)]
++[StructLayout(LayoutKind.Explicit, Size = 0x940)]
++[VirtualTable("48 8D 05 ?? ?? ?? ?? 48 89 83 18 01 00 00 48 8D 05 ?? ?? ?? ?? 48 89 BB ?? ?? ?? ??", 3)]
+ public partial struct AtkFontAnalyzerRenderer {
+-    [FieldOffset(0x130)] public AtkFontAnalyzerRenderCount AtkFontAnalyzerRenderCount;
++    [FieldOffset(0x1E0)] public AtkFontAnalyzerRenderCount AtkFontAnalyzerRenderCount;
+ }
+diff --git a/FFXIVClientStructs/STD/Helper/DefaultHasher.cs b/FFXIVClientStructs/STD/Helper/DefaultHasher.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/STD/Helper/DefaultHasher.cs
+@@ -0,0 +1,18 @@
++﻿using System.Runtime.CompilerServices;
++
++namespace FFXIVClientStructs.STD.Helper;
++
++public abstract class DefaultHasher<T> : IStaticHasher<T> where T : unmanaged {
++    public static unsafe ulong Hash(in T value) {
++        const ulong fnvOffsetBasis = 14695981039346656037ul;
++        const ulong fnvPrime = 1099511628211ul;
++        var hash = fnvOffsetBasis;
++        var bytes = (byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in value));
++        for (var i = 0; i < sizeof(T); i++) {
++            hash ^= bytes[i];
++            hash *= fnvPrime;
++        }
++
++        return hash;
++    }
++}
+diff --git a/FFXIVClientStructs/STD/Helper/HashTable.cs b/FFXIVClientStructs/STD/Helper/HashTable.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/STD/Helper/HashTable.cs
+@@ -0,0 +1,104 @@
++using System.Collections;
++using System.Diagnostics.CodeAnalysis;
++using System.Runtime.CompilerServices;
++
++namespace FFXIVClientStructs.STD.Helper;
++
++[StructLayout(LayoutKind.Sequential)]
++[SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
++public unsafe struct HashTable<T, TKey, TKeyExtractor, THasher> : IEnumerable<Pointer<HashTable<T, TKey, TKeyExtractor, THasher>.Node>>
++    where T : unmanaged
++    where TKey : unmanaged
++    where TKeyExtractor : IStaticKeyExtractor<T, TKey>
++    where THasher : IStaticHasher<TKey> {
++
++    public float MaxLoadFactor;
++
++    // list of elements, must initialize before _Vec
++    public Node* Head;
++    public ulong Count;
++
++    // "vector" of list iterators for buckets:
++    // each bucket is 2 iterators denoting the closed range of elements in the bucket,
++    // or both iterators set to _Unchecked_end() if the bucket is empty.
++    public Node** Vec;
++    public Node** VecLast;
++    public Node** VecEnd;
++
++    public ulong Mask; // the key mask
++    public ulong MaxIndex; // current maximum key value, must be a power of 2
++
++    [StructLayout(LayoutKind.Sequential)]
++    public struct Node {
++        // list node
++        public Node* Next; // successor node, or first element if head
++        public Node* Prev; // predecessor node, or last element if head
++        public T Myval; // the stored value, unused if head
++    }
++
++    public readonly int BucketCount => checked((int)MaxIndex);
++
++    public readonly bool ContainsKey(TKey key) => FindNode(key) is not null;
++
++    public readonly bool TryGetValue(TKey key, out T value) {
++        var node = FindNode(key);
++        if (node is null) {
++            value = default;
++            return false;
++        }
++
++        value = node->Myval;
++        return true;
++    }
++
++    public readonly Node* FindNode(TKey key) {
++        if (Head is null || Vec is null || Count == 0)
++            return null;
++
++        var bucket = THasher.Hash(in key) & Mask;
++        var node = Vec[(bucket << 1) + 1];
++        if (node == Head)
++            return null;
++
++        var lo = Vec[bucket << 1];
++        while (true) {
++            // Search backwards for historical reasons
++            if (StdOps<TKey>.ContentEquals(TKeyExtractor.ExtractKey(in node->Myval), in key))
++                return node;
++
++            if (node == lo)
++                return null;
++
++            node = node->Prev;
++        }
++    }
++
++    public readonly Enumerator GetEnumerator() => new(Head);
++    readonly IEnumerator IEnumerable.GetEnumerator() => new Enumerator(Head);
++    readonly IEnumerator<Pointer<Node>> IEnumerable<Pointer<Node>>.GetEnumerator() => new Enumerator(Head);
++
++    public struct Enumerator : IEnumerator<Pointer<Node>> {
++        private readonly Node* _head;
++        private Node* _node;
++
++        internal Enumerator(Node* head) {
++            _head = head;
++            _node = null;
++        }
++
++        public void Reset() => _node = null;
++
++        object IEnumerator.Current => Current;
++        public readonly Pointer<Node> Current => _node;
++
++        public bool MoveNext() {
++            if (_head is null)
++                return false;
++            _node = _node is null ? _head->Next : _node->Next;
++            return _node != _head;
++        }
++        
++        public void Dispose() {
++        }
++    }
++}
+diff --git a/FFXIVClientStructs/STD/Helper/IStaticHasher.cs b/FFXIVClientStructs/STD/Helper/IStaticHasher.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/STD/Helper/IStaticHasher.cs
+@@ -0,0 +1,11 @@
++using System.Diagnostics.CodeAnalysis;
++
++namespace FFXIVClientStructs.STD.Helper;
++
++/// <summary>
++/// hash functor primary template (handles enums, integrals, and pointers)
++/// </summary>
++[SuppressMessage("ReSharper", "MemberHidesStaticFromOuterClass")]
++public interface IStaticHasher<T> where T : unmanaged {
++    abstract static ulong Hash(in T value);
++}
+diff --git a/FFXIVClientStructs/STD/StdUnorderedMap.cs b/FFXIVClientStructs/STD/StdUnorderedMap.cs
+new file mode 100644
+--- /dev/null
++++ b/FFXIVClientStructs/STD/StdUnorderedMap.cs
+@@ -0,0 +1,105 @@
++using System.Collections;
++using FFXIVClientStructs.STD.Helper;
++
++namespace FFXIVClientStructs.STD;
++
++[StructLayout(LayoutKind.Sequential)]
++public unsafe struct StdUnorderedMap<TKey, TValue> : IReadOnlyDictionary<TKey, TValue>
++    where TKey : unmanaged
++    where TValue : unmanaged {
++
++    public HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>> WithOps;
++
++    public readonly ulong Count => WithOps.Count;
++
++    public readonly bool ContainsKey(TKey key) => WithOps.ContainsKey(key);
++
++    public readonly bool TryGetValue(TKey key, out TValue value) {
++        var node = WithOps.FindNode(key);
++        if (node is null) {
++            value = default;
++            return false;
++        }
++
++        value = node->Myval.Item2;
++        return true;
++    }
++
++    // STL-compliant behavior is to create a new entry but not implemented
++    // make this public whenever mutation is implemented
++    private ref TValue this[TKey key] {
++        get {
++            var node = WithOps.FindNode(key);
++            if (node is null)
++                throw new KeyNotFoundException();
++            return ref node->Myval.Item2;
++        }
++    }
++    
++    TValue IReadOnlyDictionary<TKey, TValue>.this[TKey key] => this[key];
++    
++    public KeyEnumerator Keys => new(WithOps.GetEnumerator());
++    public ValueEnumerator Values => new(WithOps.GetEnumerator());
++
++    IEnumerable<TKey> IReadOnlyDictionary<TKey, TValue>.Keys => Keys;
++    IEnumerable<TValue> IReadOnlyDictionary<TKey, TValue>.Values => Values;
++
++    public bool Contains(KeyValuePair<TKey, TValue> item) => throw new NotImplementedException();
++    public void CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex) => throw new NotImplementedException();
++    
++    public readonly HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Node* FindNode(TKey key) => WithOps.FindNode(key);
++    public readonly HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator GetEnumerator() => WithOps.GetEnumerator();
++
++    IEnumerator<KeyValuePair<TKey, TValue>> IEnumerable<KeyValuePair<TKey, TValue>>.GetEnumerator() => throw new NotImplementedException();
++    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
++    int IReadOnlyCollection<KeyValuePair<TKey, TValue>>.Count => throw new NotImplementedException();
++
++    public struct KeyEnumerator(HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator enumerator) : IEnumerable<TKey>, IEnumerator<TKey> {
++        private HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator _enumerator = enumerator;
++
++        public ref readonly TKey Current => ref _enumerator.Current.Value->Myval.Item1;
++        
++        public KeyEnumerator GetEnumerator() => new(enumerator);
++        public bool MoveNext() => _enumerator.MoveNext();
++        public void Reset() => _enumerator.Reset();
++        public void Dispose() {}
++
++        object IEnumerator.Current => Current;
++        TKey IEnumerator<TKey>.Current => Current;
++        IEnumerator<TKey> IEnumerable<TKey>.GetEnumerator() => GetEnumerator();
++        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
++    }
++    
++    public struct ValueEnumerator(HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator enumerator) : IEnumerable<TValue>, IEnumerator<TValue> {
++        private HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator _enumerator = enumerator;
++
++        public ref TValue Current => ref _enumerator.Current.Value->Myval.Item2;
++        
++        public ValueEnumerator GetEnumerator() => new(enumerator);
++        public bool MoveNext() => _enumerator.MoveNext();
++        public void Reset() => _enumerator.Reset();
++        public void Dispose() {}
++
++        object IEnumerator.Current => Current;
++        TValue IEnumerator<TValue>.Current => Current;
++        IEnumerator<TValue> IEnumerable<TValue>.GetEnumerator() => GetEnumerator();
++        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
++    }
++    
++    public struct Enumerator(HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator enumerator)
++        : IEnumerable<KeyValuePair<TKey, TValue>>, IEnumerator<KeyValuePair<TKey, TValue>> {
++        private HashTable<StdPair<TKey, TValue>, TKey, PairKeyExtractor<TKey, TValue>, DefaultHasher<TKey>>.Enumerator _enumerator = enumerator;
++
++        public ref StdPair<TKey, TValue> Current => ref _enumerator.Current.Value->Myval;
++        
++        public Enumerator GetEnumerator() => new(enumerator);
++        public bool MoveNext() => _enumerator.MoveNext();
++        public void Reset() => _enumerator.Reset();
++        public void Dispose() {}
++
++        object IEnumerator.Current => new KeyValuePair<TKey, TValue>(Current.Item1, Current.Item2);
++        KeyValuePair<TKey, TValue> IEnumerator<KeyValuePair<TKey, TValue>>.Current => new(Current.Item1, Current.Item2);
++        IEnumerator<KeyValuePair<TKey, TValue>> IEnumerable<KeyValuePair<TKey, TValue>>.GetEnumerator() => GetEnumerator();
++        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
++    }
++}

@@ -20,3 +20,4 @@ jobs:
           ./scripts/check-brand-assets.ps1
           ./scripts/build-shell.ps1
           ./scripts/check-shell.ps1
+          ./scripts/check-update-worker.ps1 -Executable artifacts/shell/Moonwake.exe

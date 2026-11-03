@@ -8,6 +8,18 @@ using Moonwake.Services;
 
 if (args.Contains("--child")) { await Task.Delay(700); return 0; }
 var testRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "test-data", Guid.NewGuid().ToString("N")));
+if (args.Contains("--probe-public-release"))
+{
+    var probePaths = StandalonePaths.ForRoot(testRoot);
+    probePaths.EnsureDirectories();
+    using var updates = new UpdateService(probePaths, current: "0.0.0-preview.0");
+    var check = await updates.CheckAsync(true, CancellationToken.None);
+    if (check.Release is null) throw new Exception(check.Error ?? "Public release not found.");
+    Console.WriteLine("Public release: " + check.Release.Tag);
+    if (args.Contains("--download"))
+        Console.WriteLine("Verified download: " + await updates.DownloadAsync(check.Release, Path.Combine(testRoot, "downloads"), null, CancellationToken.None));
+    return 0;
+}
 var passed = 0;
 {
     var paths = StandalonePaths.ForRoot(testRoot);
@@ -65,6 +77,7 @@ var passed = 0;
     passed += StartupTests.Run(testRoot);
     passed += DistributionTests.Run(testRoot);
     passed += CoreProfileTests.Run(testRoot);
+    passed += await UpdateTests.RunAsync(testRoot);
     Console.WriteLine($"PASS: {passed} checks");
     return 0;
 

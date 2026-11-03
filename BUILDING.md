@@ -25,6 +25,8 @@ The source recipe uses exact international commits in `upstream.lock.json`, then
 
 Optional `-DalamudCache` and `-ClientStructsCache` inputs reuse local Git objects without copying working-tree modifications. They are only build caches. A modified recipe requires a fresh `-OutputRoot`; the script will never reset an existing source directory. Pass its `Dalamud` subdirectory as `-SourceRoot` to the build and staging scripts.
 
+`upstream.lock.json` also records reviewed backports. The managed API 15 core includes the international 15.0.3.9 changes while keeping the validated native build and CN structure baseline. Font declarations include the reviewed CN 21-texture layout; international 7.57 structure changes are not applied wholesale. The numbered patches retain these choices as reproducible source changes.
+
 Staging checks the compiled application icons, includes the three native CRT dependencies from the Visual Studio x64 redistributable directory, and writes SHA-256 hashes for all payload files to `moonwake-build.json`. The injector loads missing native CRT modules from this payload before loading the core. Injection checks the payload hashes before starting the injector. This detects damaged local payloads; it is not a signed release or update trust system.
 
 ## Isolated test resources
@@ -63,7 +65,7 @@ Research mode always disables plugins. It still rejects an existing or unreadabl
 
 The interface hides after detecting the loaded core module and holds the selected process instance until it exits. It creates no tray icon. Holding the process handle prevents PID reuse from switching the tracked game. Module presence confirms injection progress, not successful loading of every core service.
 
-Offline checks include the shell lifecycle/gating suite, upstream core tests, FFXIVClientStructs signature resolution and CExporter layout diagnostics. Signature resolution must be run against the intended game executable; matches alone do not prove field layout correctness. `validation/cexporter-baseline.txt` records known inherited layout diagnostics for comparison, not a compatibility exemption. The upstream concurrent file test may intermittently fail on Windows when its unsynchronised delete races other operations; retain failures and investigate rather than hiding them. The language-pack integration test additionally requires its external fixture.
+Offline checks include the shell lifecycle/gating suite, upstream core tests, FFXIVClientStructs signature resolution and CExporter layout diagnostics. Signature resolution must be run against the intended game executable; matches alone do not prove field layout correctness. `validation/cexporter-baseline.txt` records known inherited layout diagnostics for comparison, not a compatibility exemption. The concurrent file test tolerates only Windows sharing/access races in the competing delete operation; database reads and writes must still succeed. The language-pack integration test additionally requires its external fixture.
 
 For a client update, run `scripts/check-client.ps1 -GameExecutable <ffxiv_dx11.exe> -SourceRoot <prepared-Dalamud-directory>`. It records the client version, executable hash, source recipe and resolved/total signature counts under `artifacts/`. Missing signatures fail the check even when the upstream resolver process exits successfully. The check does not add a supported game version. Use `scripts/check-layout.ps1` separately to compare inherited layout diagnostics.
 
@@ -71,7 +73,7 @@ Before a public binary release, verify startup, Chinese fonts and text input, UI
 
 ## Distribution status
 
-The current adaptation targets CN client `2026.10.06.0000.0000` for local beta use. There is no published binary release yet. Build a complete installer-free package from clean, prepared components:
+The current unstable preview targets CN client `2026.10.06.0000.0000`. Build a complete installer-free package from clean, prepared components:
 
 ```powershell
 ./scripts/build-distribution.ps1 -PayloadDirectory <staged-payload> -AssetDirectory <prepared-assets> -RuntimeDirectory <prepared-runtime> -OutputDirectory artifacts/releases/Moonwake-win-x64
@@ -79,4 +81,15 @@ The current adaptation targets CN client `2026.10.06.0000.0000` for local beta u
 
 The script embeds only these runtime components and their SHA-256 manifest in a self-contained EXE, then creates a ZIP containing the EXE and license notices. Never use a personal profile as one of these component directories. The package excludes plugin repositories, installed/development plugins and personal configuration. The data home is `%APPDATA%/XIVLauncherCN`; a fresh home is created automatically. `Moonwake.exe prepare` performs the same initialization without injecting a game.
 
-Initialization verifies bundled resources, stages missing components, and only switches component paths after verification succeeds. Damaged components receive a new directory; old components and all personal data are preserved. Existing user preferences and normal plugin loading remain intact. There is no automatic updater yet: replace the tool with a newer complete package while retaining the user data directory. Publish the corresponding AGPL source and notices alongside any future public core distribution.
+Initialization verifies bundled resources, stages missing components, and only switches component paths after verification succeeds. Damaged components receive a new directory; old components and all personal data are preserved. Existing user preferences and normal plugin loading remain intact. The package uses .NET and Windows Desktop runtime 10.0.14, SQLitePCLRaw managed bundle 2.1.11 with native library 2.1.14, and PKCS 8.0.2. Build paths are mapped to neutral source paths.
+
+The desktop checks public GitHub releases in the background with a 24-hour cache and a one-hour retry backoff. Preview builds receive previews and stable releases; stable builds ignore previews. Downloads require the matching Windows ZIP asset, HTTPS GitHub release URL, size and SHA256 digest. A separate copy of the GUI EXE waits for the original process, applies a transaction, retains the previous tool files and restores them if replacement fails. Update archives cannot contain plugin or configuration files.
+
+Validate the actual self-contained executables before publishing:
+
+```powershell
+./scripts/check-distribution.ps1 -Executable <complete-package/Moonwake.exe>
+./scripts/check-update-worker.ps1 -Executable <complete-package/Moonwake.exe>
+```
+
+These checks use isolated artifact directories. The `verify-bundle <directory>` diagnostic prepares and validates bundled resources without injecting or using the normal player profile. Public releases include a matching source tag, complete ZIP and checksum file. Mark previews as GitHub pre-releases and enable Issues.

@@ -1,0 +1,94 @@
+diff --git a/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs b/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs
+@@ -0,0 +1,66 @@
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Runtime.InteropServices;
++
++using Dalamud.Game.Gui.PartyFinder.Types;
++using Dalamud.Utility;
++
++using FFXIVClientStructs.FFXIV.Component.GUI;
++
++using Lumina.Text.ReadOnly;
++
++using Xunit;
++
++namespace Dalamud.Test.Game;
++
++public sealed class UpstreamApiCompatibilityTests
++{
++    [Fact]
++    public void EmptyTextSearchCannotEnterAnInfiniteReplacementLoop()
++        => Assert.Throws<System.ArgumentException>(() =>
++            new ReadOnlySeString("content"u8.ToArray()).AsSpan().ReplaceText(""u8, "replacement"u8));
++
++    [Fact]
++    public void TextReplacementPreservesUnicode()
++    {
++        var text = new ReadOnlySeString("你好，冒险者！"u8.ToArray());
++        Assert.Equal("你好，Moonwake！", text.AsSpan().ReplaceText("冒险者"u8, "Moonwake"u8).ExtractText());
++    }
++
++    [Theory]
++    [InlineData(JobFlags.Viper)]
++    [InlineData(JobFlags.Pictomancer)]
++    [InlineData(JobFlags.Beastmaster)]
++    public void PartyFinderKeepsWideJobFlags(JobFlags job)
++    {
++        var slot = new PartyFinderSlot((ulong)job | (ulong)JobFlags.Paladin);
++        Assert.True(slot[job]);
++        Assert.True(slot[JobFlags.Paladin]);
++        Assert.False(slot[JobFlags.Monk]);
++        Assert.Contains(job, slot.Accepting);
++        Assert.Equal(2, slot.Accepting.Count);
++    }
++
++    [Fact]
++    public void CnFontBuffersMatchTheNativeBuildFontStride()
++    {
++        // Native CN BuildFont multiplies the font index by 0x1A8.
++        Assert.Equal(0x1A8, Unsafe.SizeOf<AtkFontManager.Font>());
++        Assert.Equal(21, AtkFontManager.Font.MaxTextures);
++        var field = typeof(AtkFontManager.Font).GetField("TextureCount")!;
++        Assert.Equal(0x1A0, field.GetCustomAttribute<FieldOffsetAttribute>()!.Value);
++        Assert.Equal(0xDA0, Unsafe.SizeOf<AtkFontAnalyzer>());
++        Assert.Equal(0x1E0, Unsafe.SizeOf<AtkFontAnalyzerRenderCount>());
++        Assert.Equal(0x940, Unsafe.SizeOf<AtkFontAnalyzerRenderer>());
++    }
++
++    [Fact]
++    public void FontGlyphPackingPreservesCjkTextureIndices()
++    {
++        var glyph = new AtkFontManager.Glyph();
++        glyph.Packed = (4095, 2048, 3, 20);
++        Assert.Equal((4095, 2048, 3, 20), glyph.Packed);
++        glyph.Packed = (1, 2, 0, 0);
++        Assert.Equal((1, 2, 0, 0), glyph.Packed);
++    }
++}
+diff --git a/Dalamud.Test/Storage/ReliableFileStorageTests.cs b/Dalamud.Test/Storage/ReliableFileStorageTests.cs
+--- a/Dalamud.Test/Storage/ReliableFileStorageTests.cs
++++ b/Dalamud.Test/Storage/ReliableFileStorageTests.cs
+@@ -52,7 +52,18 @@
+                                   }
+                                   else
+                                   {
+-                                      File.Delete(tempFile);
++                                      try
++                                      {
++                                          File.Delete(tempFile);
++                                      }
++                                      catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
++                                      {
++                                          // On Windows, a concurrent writer can briefly prevent deletion.
++                                      }
++                                      catch (IOException ex) when (OperatingSystem.IsWindows() && ((ex.HResult & 0xFFFF) is 32 or 33))
++                                      {
++                                          // Ignore only sharing/lock violations from the competing delete.
++                                      }
+                                   }
+                               })));
+     }

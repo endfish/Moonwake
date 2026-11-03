@@ -1,0 +1,25 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -10,6 +10,10 @@
+ if(NOT MSVC)
+     message(FATAL_ERROR "Only MSVC is supported for now.")
+ endif()
++
++file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}" MOONWAKE_SOURCE_PATH)
++add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/experimental:deterministic>" "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${MOONWAKE_SOURCE_PATH}=/_/Dalamud>")
++add_link_options("/PDBALTPATH:%_PDB%")
+ 
+ set(DALAMUD_BIN_DIR "${PROJECT_SOURCE_DIR}/bin/$<CONFIG>")
+ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${DALAMUD_BIN_DIR}")
+diff --git a/Directory.Build.props b/Directory.Build.props
+--- a/Directory.Build.props
++++ b/Directory.Build.props
+@@ -4,6 +4,7 @@
+     <PropertyGroup Label="Target">
+         <TargetFramework>net10.0-windows</TargetFramework>
+         <PlatformTarget>x64</PlatformTarget>
++        <PathMap>$(MSBuildThisFileDirectory)=/_/Dalamud/</PathMap>
+         <Platforms>x64</Platforms>
+ 
+         <!-- preview, as docfx is late at upgrading Roslyn versions -->

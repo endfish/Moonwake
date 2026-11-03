@@ -1,0 +1,32 @@
+name: 问题反馈
+description: 反馈 Moonwake 启动、注入、更新或插件兼容问题
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: "Moonwake 目前为不稳定测试版。请描述实际现象；粘贴日志前请检查并移除个人信息。"
+  - type: input
+    id: version
+    attributes:
+      label: Moonwake 版本
+      placeholder: 例如 0.2.0-preview.1
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: 国服游戏版本及 Windows 版本
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 现象与复现步骤
+      description: 说明预期行为、实际行为，以及是否每次出现；涉及插件时注明插件名称和版本。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或截图
+      description: 日志位于 %APPDATA%/XIVLauncherCN/moonwake/logs。请提供错误附近的内容。

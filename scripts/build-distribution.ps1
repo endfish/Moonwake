@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$AssetDirectory,
     [Parameter(Mandatory)][string]$RuntimeDirectory,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [string]$ReleaseId = '0.1.1-preview.4',
+    [string]$ReleaseId = '0.2.0-preview.1',
     [string[]]$SupportedGameVersions = @('2026.10.06.0000.0000')
 )
 $ErrorActionPreference = 'Stop'
@@ -74,9 +74,16 @@ Moonwake 自己编译的核心、资源和运行时也保存在 XIVLauncherCN �
 不再创建 %APPDATA%\Moonwake。切换工具后继续使用同一套插件与插件自身配置。
 
 本包不包含任何人的插件、仓库地址、个人配置、账号或开发路径。
-当前没有自动更新功能，后续版本使用新的工具包。
+程序每天在后台检查一次 GitHub 更新。窗口底部可手动检查，确认后下载、校验并更新；游戏已加载核心时请先退出游戏。
+更新只替换工具文件，不覆盖插件和个人设置；上一版工具保留在工具目录的 .moonwake-previous 中。
+无法连接 GitHub 时，请检查网络，必要时使用网络代理；也可从发布页手动下载完整包并覆盖工具文件。
+
+目前为不稳定测试版。如遇问题，请在 https://github.com/endfish/Moonwake/issues 提交反馈。
 '@ | Set-Content -LiteralPath (Join-Path $OutputDirectory '使用说明.txt') -Encoding utf8
-[IO.Compression.ZipFile]::CreateFromDirectory($OutputDirectory, $OutputDirectory + '.zip', [IO.Compression.CompressionLevel]::Optimal, $true)
-[pscustomobject]@{Output=$OutputDirectory;Archive=($OutputDirectory+'.zip');Components=$files.Count;Manifest=$manifestPath;BuildDirectory=$work;ExeSha256=(Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'Moonwake.exe') -Algorithm SHA256).Hash} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'build-result.json') -Encoding utf8
-Write-Output "Distribution created: $OutputDirectory"
+$releaseArchive = Join-Path (Split-Path -Parent $OutputDirectory) "Moonwake-$ReleaseId-win-x64.zip"
+[IO.Compression.ZipFile]::CreateFromDirectory($OutputDirectory, $releaseArchive, [IO.Compression.CompressionLevel]::Optimal, $false)
+$archiveHash = (Get-FileHash -LiteralPath $releaseArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+"$archiveHash  $([IO.Path]::GetFileName($releaseArchive))" | Set-Content -LiteralPath ($releaseArchive + '.sha256') -Encoding ascii
+[pscustomobject]@{Output=$OutputDirectory;Archive=$releaseArchive;Components=$files.Count;Manifest=$manifestPath;BuildDirectory=$work;ExeSha256=(Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'Moonwake.exe') -Algorithm SHA256).Hash;ArchiveSha256=$archiveHash} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'build-result.json') -Encoding utf8
+Write-Output "Distribution created: $releaseArchive"
 Write-Output "Build evidence: $work"

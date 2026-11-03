@@ -23,6 +23,11 @@ internal sealed class LauncherForm : Form
     private readonly System.Windows.Forms.Timer timer = new();
     private readonly CancellationTokenSource lifetime = new();
     private readonly ToolTip tooltips = new();
+    private readonly LinkLabel updateLink = new();
+    private readonly UpdateService updates;
+    private readonly string updateRoot;
+    private AvailableRelease? availableRelease;
+    private bool checkingUpdate;
     private bool busy;
     private bool attached;
     private string? lastFailure;
@@ -36,6 +41,8 @@ internal sealed class LauncherForm : Form
         this.logger = logger;
         this.validator = new PayloadValidator(paths);
         this.preview = preview;
+        this.updates = new UpdateService(paths);
+        this.updateRoot = Path.Combine(paths.TempDirectory, "updates");
         this.Text = "Moonwake";
         this.ClientSize = new Size(400, 500);
         this.FormBorderStyle = FormBorderStyle.None;
@@ -56,7 +63,11 @@ internal sealed class LauncherForm : Form
         this.timer.Tick += (_, _) => this.RefreshProcesses();
         this.processes.SelectionChangeCommitted += (_, _) => { this.lastFailure = null; this.UpdateState(); };
         this.inject.Click += this.InjectAsync;
-        this.Shown += (_, _) => { this.RefreshProcesses(); if (!preview) this.timer.Start(); };
+        this.Shown += async (_, _) =>
+        {
+            this.RefreshProcesses();
+            if (!preview) { this.timer.Start(); await this.CheckUpdateAsync(false); }
+        };
         this.FormClosing += (_, e) => { if (this.busy) e.Cancel = true; };
         this.FormClosed += (_, _) => { this.lifetime.Cancel(); this.timer.Dispose(); this.tooltips.Dispose(); };
         this.AcceptButton = this.inject;
@@ -124,6 +135,58 @@ internal sealed class LauncherForm : Form
         this.status.AutoEllipsis = true;
         this.Controls.Add(this.status);
         this.tooltips.SetToolTip(this.inject, "成功后隐藏窗口；游戏关闭时自动退出，无托盘图标。");
+        this.updateLink.Bounds = new Rectangle(40, 465, 320, 24);
+        this.updateLink.Text = $"v{UpdateService.CurrentVersion} · 检查更新";
+        this.updateLink.TextAlign = ContentAlignment.MiddleCenter;
+        this.updateLink.BackColor = Color.Transparent;
+        this.updateLink.LinkColor = this.updateLink.ActiveLinkColor = Color.FromArgb(168, 214, 235);
+        this.updateLink.Font = new Font("Microsoft YaHei UI", 8F);
+        this.updateLink.LinkBehavior = LinkBehavior.HoverUnderline;
+        this.updateLink.LinkClicked += async (_, _) =>
+        {
+            if (this.busy || this.attached || this.checkingUpdate || this.preview) return;
+            if (this.availableRelease is null) await this.CheckUpdateAsync(true);
+            if (this.availableRelease is not { } release || this.IsDisposed || this.attached || this.busy) return;
+            if (this.processService.Discover().Any(p => p.DalamudState == DalamudModuleState.Loaded))
+            { MessageBox.Show(this, "请在退出已加载 Dalamud 的游戏后更新 Moonwake。", "Moonwake 更新"); return; }
+            this.busy = true;
+            this.inject.Enabled = false;
+            try
+            {
+                using var dialog = new UpdateForm(release, this.updates, this.updateRoot);
+                if (dialog.ShowDialog(this) != DialogResult.OK || dialog.ReadyDirectory is null)
+                { this.availableRelease = null; return; }
+                if (this.processService.Discover().Any(p => p.DalamudState == DalamudModuleState.Loaded))
+                    throw new InvalidOperationException("检测到游戏已加载核心，请退出游戏后再更新。");
+                UpdateInstaller.Begin(dialog.ReadyDirectory);
+                this.busy = false;
+                this.Close();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            { this.logger.Warn("更新未完成：" + ex.Message); MessageBox.Show(this, ex.Message, "Moonwake 更新"); }
+            finally { this.busy = false; if (!this.IsDisposed) this.UpdateState(); }
+        };
+        this.Controls.Add(this.updateLink);
+    }
+
+    private async Task CheckUpdateAsync(bool manual)
+    {
+        if (this.checkingUpdate) return;
+        this.checkingUpdate = true;
+        this.updateLink.Text = $"v{UpdateService.CurrentVersion} · 正在检查更新…";
+        try
+        {
+            var result = await this.updates.CheckAsync(manual, this.lifetime.Token);
+            if (this.IsDisposed || this.attached) return;
+            this.availableRelease = result.Release;
+            this.updateLink.Text = result.Release is { } release ? $"发现新版本 {release.Tag} · 查看更新" :
+                $"v{UpdateService.CurrentVersion} · {(result.Error is null ? "检查更新" : "暂时无法连接 GitHub")}";
+            this.tooltips.SetToolTip(this.updateLink, result.Error ?? "自动检查每天一次；点击可手动检查更新。可使用系统网络代理。");
+            if (result.Error is not null) this.logger.Warn(result.Error);
+            if (manual && result.Release is null) MessageBox.Show(this, result.Error ?? "当前已是此渠道的最新版本。", "Moonwake 更新");
+        }
+        catch (OperationCanceledException) when (this.lifetime.IsCancellationRequested) { }
+        finally { this.checkingUpdate = false; }
     }
 
     private void SetStatus(string text)
@@ -234,7 +297,7 @@ internal sealed class LauncherForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { this.BackgroundImage?.Dispose(); this.lifetime.Dispose(); }
+        if (disposing) { this.BackgroundImage?.Dispose(); this.updates.Dispose(); this.lifetime.Dispose(); }
         base.Dispose(disposing);
     }
 
