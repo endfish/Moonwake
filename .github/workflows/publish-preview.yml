@@ -36,7 +36,9 @@ jobs:
           $cmakeName = 'cmake-4.2.0-windows-x86_64.zip'
           $base = 'https://github.com/Kitware/CMake/releases/download/v4.2.0'
           Invoke-WebRequest "$base/$cmakeName" -OutFile $cmakeArchive
-          $checksums = (Invoke-WebRequest "$base/cmake-4.2.0-SHA-256.txt").Content
+          $checksumFile = Join-Path $env:RUNNER_TEMP 'cmake-checksums.txt'
+          Invoke-WebRequest "$base/cmake-4.2.0-SHA-256.txt" -OutFile $checksumFile
+          $checksums = Get-Content -LiteralPath $checksumFile -Raw
           $line = @($checksums -split "`n" | Where-Object { $_.Trim().EndsWith($cmakeName) })
           if ($line.Count -ne 1 -or (Get-FileHash $cmakeArchive -Algorithm SHA256).Hash -ne ($line[0] -split '\s+')[0]) { throw 'CMake checksum mismatch.' }
           $cmakeRoot = Join-Path $env:RUNNER_TEMP 'moonwake-cmake'
