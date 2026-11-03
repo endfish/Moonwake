@@ -1,0 +1,86 @@
+name: Build release package
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing source tag to package
+        required: true
+        default: v0.2.0-preview.1
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Validate source tag and exclude local instructions
+        shell: pwsh
+        run: |
+          Add-Content -LiteralPath .git/info/exclude -Value "`nAGENTS.md`n"
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-preview\.\d+)?$') { throw 'Invalid release tag.' }
+          if ((git describe --tags --exact-match HEAD) -ne $env:RELEASE_TAG) { throw 'Source tag mismatch.' }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare verified CMake and .NET runtime archives
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cmakeArchive = Join-Path $env:RUNNER_TEMP 'cmake.zip'
+          $cmakeName = 'cmake-4.2.0-windows-x86_64.zip'
+          $base = 'https://github.com/Kitware/CMake/releases/download/v4.2.0'
+          Invoke-WebRequest "$base/$cmakeName" -OutFile $cmakeArchive
+          $checksums = (Invoke-WebRequest "$base/cmake-4.2.0-SHA-256.txt").Content
+          $line = @($checksums -split "`n" | Where-Object { $_.Trim().EndsWith($cmakeName) })
+          if ($line.Count -ne 1 -or (Get-FileHash $cmakeArchive -Algorithm SHA256).Hash -ne ($line[0] -split '\s+')[0]) { throw 'CMake checksum mismatch.' }
+          $cmakeRoot = Join-Path $env:RUNNER_TEMP 'moonwake-cmake'
+          Expand-Archive $cmakeArchive $cmakeRoot
+          "MOONWAKE_CMAKE=$cmakeRoot/cmake-4.2.0-windows-x86_64/bin/cmake.exe" >> $env:GITHUB_ENV
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'moonwake-runtime'
+          $metadata = Invoke-RestMethod 'https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json'
+          $release = @($metadata.releases | Where-Object { $_.'release-version' -eq '10.0.14' })[0]
+          foreach ($spec in @(@($release.runtime, 'dotnet-runtime-win-x64.zip'), @($release.windowsdesktop, 'windowsdesktop-runtime-win-x64.zip'))) {
+            $file = @($spec[0].files | Where-Object { $_.rid -eq 'win-x64' -and $_.name -eq $spec[1] })[0]
+            if (!$file) { throw 'Runtime metadata missing.' }
+            $archive = Join-Path $env:RUNNER_TEMP $spec[1]
+            Invoke-WebRequest $file.url -OutFile $archive
+            if ((Get-FileHash $archive -Algorithm SHA512).Hash -ne $file.hash) { throw 'Runtime checksum mismatch.' }
+            Expand-Archive $archive $runtimeRoot -Force
+          }
+          "MOONWAKE_RUNTIME=$runtimeRoot" >> $env:GITHUB_ENV
+      - name: Build and test tagged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/prepare-core.ps1
+          ./scripts/build-core.ps1 -CMakePath $env:MOONWAKE_CMAKE -ReleaseId $env:RELEASE_TAG.TrimStart('v')
+          dotnet run --project tests/Moonwake.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed.' }
+          ./scripts/check-layout.ps1
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -version '[17.0,18.0)' -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $crt = Get-ChildItem -LiteralPath "$vs/VC/Redist/MSVC" -Recurse -Filter vcruntime140.dll | Where-Object { $_.Directory.Name -eq 'Microsoft.VC143.CRT' -and $_.Directory.Parent.Name -eq 'x64' } | Select-Object -First 1
+          if (!$crt) { throw 'Visual C++ x64 redistributable not found.' }
+          ./scripts/stage-core.ps1 -Destination artifacts/components/payloads/moonwake-cn-2026.10.06-$($env:RELEASE_TAG.TrimStart('v')) -VCRuntimeDirectory $crt.Directory.FullName
+          ./scripts/prepare-resources.ps1 -HomeDirectory artifacts/resources -DotnetRoot $env:MOONWAKE_RUNTIME -RuntimeVersion 10.0.14
+          ./scripts/check-localization.ps1 -SourceRoot .build/source/Dalamud -AssetDirectory artifacts/resources/assets/current
+          ./scripts/build-distribution.ps1 -PayloadDirectory artifacts/components/payloads/moonwake-cn-2026.10.06-$($env:RELEASE_TAG.TrimStart('v')) -AssetDirectory artifacts/resources/assets/current -RuntimeDirectory artifacts/resources/runtime -OutputDirectory artifacts/public/Moonwake -ReleaseId $env:RELEASE_TAG.TrimStart('v')
+          ./scripts/check-shell.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe
+          ./scripts/check-distribution.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe
+          ./scripts/check-update-worker.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe
+      - name: Upload verified package to an existing draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $draft = gh release view $env:RELEASE_TAG --json isDraft --jq .isDraft
+          if ($LASTEXITCODE -ne 0 -or $draft -ne 'true') { throw 'Upload is limited to an existing draft release.' }
+          $archive = "artifacts/public/Moonwake-$($env:RELEASE_TAG.TrimStart('v'))-win-x64.zip"
+          gh release upload $env:RELEASE_TAG $archive ($archive + '.sha256') --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed.' }
