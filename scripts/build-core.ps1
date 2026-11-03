@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$SourceRoot, [string]$CMakePath = 'cmake', [switch]$SkipNative, [string]$ReleaseId = '0.2.0-preview.1')
+param([string]$SourceRoot, [string]$CMakePath = 'cmake', [switch]$SkipNative, [string]$ReleaseId = '0.2.0-preview.2')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (!$SourceRoot) { $SourceRoot = Join-Path $repoRoot '.build/source/Dalamud' }

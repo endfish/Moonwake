@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$AssetDirectory,
     [Parameter(Mandatory)][string]$RuntimeDirectory,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [string]$ReleaseId = '0.2.0-preview.1',
+    [string]$ReleaseId = '0.2.0-preview.2',
     [string[]]$SupportedGameVersions = @('2026.10.06.0000.0000')
 )
 $ErrorActionPreference = 'Stop'

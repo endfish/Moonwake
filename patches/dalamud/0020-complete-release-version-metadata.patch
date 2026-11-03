@@ -1,0 +1,43 @@
+diff --git a/Dalamud/Dalamud.csproj b/Dalamud/Dalamud.csproj
+--- a/Dalamud/Dalamud.csproj
++++ b/Dalamud/Dalamud.csproj
+@@ -188,7 +188,7 @@
+         <DalamudRevisionFile>$(OutputPath)revision.txt</DalamudRevisionFile>
+     </PropertyGroup>
+ 
+-    <Target Name="GetVersionData" BeforeTargets="WriteVersionData" Condition="'$(SCMVersion)'=='' And '$(Configuration)'=='Release'">
++    <Target Name="GetVersionData" BeforeTargets="WriteVersionData" Condition="'$(Configuration)'=='Release'">
+         <Exec Command="git -C &quot;$(ProjectDir.Replace('\','\\'))&quot; rev-list --count HEAD" ConsoleToMSBuild="true">
+             <Output TaskParameter="ConsoleOutput" PropertyName="DalamudGitCommitCount" />
+         </Exec>
+@@ -208,8 +208,8 @@
+         <PropertyGroup>
+             <CommitCount>$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitCommitCount), @"\t|\n|\r", ""))</CommitCount>
+             <CommitHash>$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitCommitHash), @"\t|\n|\r", ""))</CommitHash>
+-            <Branch>$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitBranch), @"\t|\n|\r", ""))</Branch>
+-            <SCMVersion>$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitDescribeOutput), @"\t|\n|\r", ""))</SCMVersion>
++            <Branch Condition="'$(Branch)'==''">$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitBranch), @"\t|\n|\r", ""))</Branch>
++            <SCMVersion Condition="'$(SCMVersion)'==''">$([System.Text.RegularExpressions.Regex]::Replace($(DalamudGitDescribeOutput), @"\t|\n|\r", ""))</SCMVersion>
+             <CommitHashClientStructs>$([System.Text.RegularExpressions.Regex]::Replace($(ClientStructsGitDescribeOutput), @"\t|\n|\r", ""))</CommitHashClientStructs>
+         </PropertyGroup>
+ 
+diff --git a/Dalamud.Test/Utility/VersionMetadataTests.cs b/Dalamud.Test/Utility/VersionMetadataTests.cs
+new file mode 100644
+--- /dev/null
++++ b/Dalamud.Test/Utility/VersionMetadataTests.cs
+@@ -0,0 +1,15 @@
++using Dalamud.Utility;
++using Xunit;
++
++namespace Dalamud.Test.Utility;
++
++public class VersionMetadataTests
++{
++    [Fact]
++    public void EntryPointVersionReadsSucceedForPackagedCore()
++    {
++        Assert.False(string.IsNullOrWhiteSpace(Versioning.GetScmVersion()));
++        Assert.False(string.IsNullOrWhiteSpace(Versioning.GetGitHashClientStructs()));
++        Assert.False(string.IsNullOrWhiteSpace(Versioning.GetGitBranch()));
++    }
++}
