@@ -76,6 +76,7 @@ var passed = 0;
     ExpectFailure(() => PayloadIntegrity.Verify(payload), "manifest path traversal is rejected");
     passed += StartupTests.Run(testRoot);
     passed += DistributionTests.Run(testRoot);
+    passed += ResourceRetryTests.Run(testRoot);
     passed += CoreProfileTests.Run(testRoot);
     passed += await UpdateTests.RunAsync(testRoot);
     Console.WriteLine($"PASS: {passed} checks");

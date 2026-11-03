@@ -86,12 +86,13 @@ internal static class DistributionBootstrap
             {
                 var destination = SafePath(paths.HomeDirectory, selected[index]);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                Directory.Move(SafePath(stage, components[index]), destination);
+                FileOperationRetry.MoveDirectory(SafePath(stage, components[index]), destination);
             }
             // Only remove our unique staging directory; never remove an existing component or user directory.
             if (!Path.GetFullPath(stage).StartsWith(Path.GetFullPath(paths.TempDirectory) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("临时目录无效。");
-            Directory.Delete(stage, true);
+            try { Directory.Delete(stage, true); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Verified components are ready; temporary cleanup can wait. */ }
         }
         if (config.PayloadDirectory != selected[0] || config.AssetDirectory != selected[1] || config.RuntimeDirectory != selected[2] ||
             !config.SupportedGameVersions.SequenceEqual(manifest.SupportedGameVersions))
