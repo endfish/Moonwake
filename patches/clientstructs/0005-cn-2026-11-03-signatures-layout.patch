@@ -1,0 +1,111 @@
+diff --git a/FFXIVClientStructs/FFXIV/Client/Graphics/Kernel/ImmediateContext.cs b/FFXIVClientStructs/FFXIV/Client/Graphics/Kernel/ImmediateContext.cs
+--- a/FFXIVClientStructs/FFXIV/Client/Graphics/Kernel/ImmediateContext.cs
++++ b/FFXIVClientStructs/FFXIV/Client/Graphics/Kernel/ImmediateContext.cs
+@@ -75,7 +75,7 @@
+     [MemberFunction("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B D7 48 8B CB E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 83 7F")]
+     public partial void SetMultiViewports(uint viewportCount, IntRectangle* viewports, float* minDepths, float* maxDepths);
+ 
+-    [MemberFunction("E9 ?? ?? ?? ?? 48 8B 4A 10")]
++    [MemberFunction("E8 ?? ?? ?? ?? 48 8B 4F ?? FF 57")]
+     public partial void SetDefaultState();
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 83 7F ?? ?? 0F 84 ?? ?? ?? ?? 48 83 7F")]
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterBookDetail.cs b/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterBookDetail.cs
+--- a/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterBookDetail.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterBookDetail.cs
+@@ -8,34 +8,35 @@
+ [Addon("XBMMonsterBookDetail")]
+ [GenerateInterop]
+ [Inherits<AtkUnitBase>]
+-[StructLayout(LayoutKind.Explicit, Size = 0x3C0)]
++[StructLayout(LayoutKind.Explicit, Size = 0x398)]
+ public unsafe partial struct AddonXBMMonsterBookDetail {
+-    [FieldOffset(0x238)] public AtkTextNode* EntryNumberText;
+-    [FieldOffset(0x240)] public AtkTextNode* EntryName;
+-    [FieldOffset(0x248)] public AtkImageNode* EntryImage;
+-    [FieldOffset(0x250)] private AtkComponentNode* Unk250;
+-    [FieldOffset(0x258)] public AtkTextNode* EntryClassification;
+-    [FieldOffset(0x260)] public AtkTextNode* EntryBorrowActionName;
+-    [FieldOffset(0x268)] public AtkComponentIcon* EntryBorrowComponentIcon;
+-    [FieldOffset(0x270)] public AtkTextNode* EntryAutoAttackType;
+-    [FieldOffset(0x278)] public StdVector<Pointer<AtkComponentBase>> EntryBeastActionsComponents;
+-    [FieldOffset(0x290)] public AtkTextNode* EntryAreaLocation;
+-    [FieldOffset(0x298)] public AtkTextNode* EntryDescription;
+-    [FieldOffset(0x2A0)] public AtkTextNode* EntryHabitat;
+-    [FieldOffset(0x2A8)] public AtkTextNode* EntryHPCount;
+-    [FieldOffset(0x2B0)] public AtkTextNode* EntryExpCount;
+-    [FieldOffset(0x2B8)] public AtkComponentGaugeBar* EntryExpGaugeBar;
+-    [FieldOffset(0x2C0)] public AtkTextNode* EntrySatietyCount;
+-    [FieldOffset(0x2C8)] public AtkTextNode* EntryStrengthHeader;
+-    [FieldOffset(0x2D0)] public AtkTextNode* EntryStrengthCount;
+-    [FieldOffset(0x2D8)] public AtkTextNode* EntryPhysicalResistanceHeader;
+-    [FieldOffset(0x2E0)] public AtkTextNode* EntryPhysicalResistanceCount;
+-    [FieldOffset(0x2E8)] public AtkTextNode* EntryConstitutionHeader;
+-    [FieldOffset(0x2F0)] public AtkTextNode* EntryConstitutionCount;
+-    [FieldOffset(0x2F8)] public AtkTextNode* EntryIngelligenceHeader;
+-    [FieldOffset(0x300)] public AtkTextNode* EntryIngelligenceCount;
+-    [FieldOffset(0x308)] public AtkTextNode* EntryMagicalResistanceHeader;
+-    [FieldOffset(0x310)] public AtkTextNode* EntryMagicalResistanceCount;
+-    [FieldOffset(0x318)] public StdVector<Pointer<AtkComponentButton>> EntryEquipedItemsSlots;
+ 
++    [FieldOffset(0x298)] public AtkTextNode* EntryNumberText;
++    [FieldOffset(0x2A0)] public AtkTextNode* EntryName;
++    [FieldOffset(0x2A8)] public AtkImageNode* EntryImage;
++    [FieldOffset(0x2B0)] private AtkComponentNode* Unk250;
++    [FieldOffset(0x2B8)] public AtkTextNode* EntryClassification;
++    [FieldOffset(0x2C0)] public AtkTextNode* EntryBorrowActionName;
++    [FieldOffset(0x2C8)] public AtkComponentIcon* EntryBorrowComponentIcon;
++    [FieldOffset(0x2D0)] public AtkTextNode* EntryAutoAttackType;
++    [FieldOffset(0x2D8)] public StdVector<Pointer<AtkComponentBase>> EntryBeastActionsComponents;
++    [FieldOffset(0x2F0)] public AtkTextNode* EntryAreaLocation;
++    [FieldOffset(0x2F8)] public AtkTextNode* EntryDescription;
++    [FieldOffset(0x300)] public AtkTextNode* EntryHabitat;
++    [FieldOffset(0x308)] public AtkTextNode* EntryHPCount;
++    [FieldOffset(0x310)] public AtkTextNode* EntryExpCount;
++
++    [FieldOffset(0x320)] public AtkComponentGaugeBar* EntryExpGaugeBar;
++    [FieldOffset(0x328)] public AtkTextNode* EntrySatietyCount;
++    [FieldOffset(0x330)] public AtkTextNode* EntryStrengthHeader;
++    [FieldOffset(0x338)] public AtkTextNode* EntryStrengthCount;
++    [FieldOffset(0x340)] public AtkTextNode* EntryPhysicalResistanceHeader;
++    [FieldOffset(0x348)] public AtkTextNode* EntryPhysicalResistanceCount;
++    [FieldOffset(0x350)] public AtkTextNode* EntryConstitutionHeader;
++    [FieldOffset(0x358)] public AtkTextNode* EntryConstitutionCount;
++    [FieldOffset(0x360)] public AtkTextNode* EntryIngelligenceHeader;
++    [FieldOffset(0x368)] public AtkTextNode* EntryIngelligenceCount;
++    [FieldOffset(0x370)] public AtkTextNode* EntryMagicalResistanceHeader;
++    [FieldOffset(0x378)] public AtkTextNode* EntryMagicalResistanceCount;
++    [FieldOffset(0x380)] public StdVector<Pointer<AtkComponentButton>> EntryEquipedItemsSlots;
+ }
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterNotebook.cs b/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterNotebook.cs
+--- a/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterNotebook.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/AddonXBMMonsterNotebook.cs
+@@ -8,7 +8,7 @@
+ [Addon("XBMMonsterNotebook")]
+ [GenerateInterop]
+ [Inherits<AtkUnitBase>]
+-[StructLayout(LayoutKind.Explicit, Size = 0x880)]
++[StructLayout(LayoutKind.Explicit, Size = 0x8A0)]
+ public partial struct AddonXBMMonsterNotebook {
+-    [FieldOffset(0x6E8)] public TabController TabController;
++    [FieldOffset(0x708)] public TabController TabController;
+ }
+diff --git a/FFXIVClientStructs/FFXIV/Client/UI/Misc/TofuHelper.cs b/FFXIVClientStructs/FFXIV/Client/UI/Misc/TofuHelper.cs
+--- a/FFXIVClientStructs/FFXIV/Client/UI/Misc/TofuHelper.cs
++++ b/FFXIVClientStructs/FFXIV/Client/UI/Misc/TofuHelper.cs
+@@ -9,13 +9,13 @@
+ public unsafe partial struct TofuHelper {
+     [FieldOffset(0x10)] public TofuHelperData* Data;
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B 07 48 8B CF FF 90 ?? ?? ?? ?? 48 8B D6 48 8B 48 ?? E8 ?? ?? ?? ?? E9")]
++    [MemberFunction("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B 07 48 8B CF FF 90 ?? ?? ?? ?? 48 8B D6 48 8B 48 ?? E8 ?? ?? ?? ?? EB")]
+     public partial void HandleStartSharingPacket(ServerIpcSegment<TofuStartSharingPacket>* packet);
+ 
+     [MemberFunction("E8 ?? ?? ?? ?? 66 0F 6F 05 ?? ?? ?? ?? 48 8D 8B")]
+     public partial void HandleStopSharingPacket(ServerIpcSegment<TofuStopSharingPacket>* packet);
+ 
+-    [MemberFunction("E8 ?? ?? ?? ?? EB ?? B8 ?? ?? ?? ?? 66 41 39 41")]
++    [MemberFunction("E8 ?? ?? ?? ?? EB ?? 48 8B 07 48 8B CF FF 90 ?? ?? ?? ?? 48 8B D6")]
+     public partial void HandleRealTimeUpdatePacket(ServerIpcSegment<TofuRealTimeUpdatePacket>* packet);
+ 
+     [MemberFunction("48 83 EC ?? 4C 8B 51 ?? 4D 85 D2 0F 84")]

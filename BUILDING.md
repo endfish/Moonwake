@@ -55,7 +55,7 @@ Opening the plugin manager uses its current in-memory repository snapshot. Start
 
 ## Compatibility and testing
 
-New configuration admits the currently adapted CN client `2026.10.06.0000.0000` and enables ordinary plugin loading. The desktop always uses ordinary injection and does not enable safe mode. Other client versions require a matching adaptation. An explicit research mode remains available only as a diagnostic CLI command:
+New configuration targets CN 7.58 (client `2026.11.03.0000.0000`) and enables ordinary plugin loading. The desktop always uses ordinary injection and does not enable safe mode. Other client versions require a matching adaptation. An explicit research mode remains available only as a diagnostic CLI command:
 
 ```powershell
 ./artifacts/shell/Moonwake.exe inject --pid <game-pid> --research | Out-Host
@@ -73,7 +73,7 @@ Before a public binary release, verify startup, Chinese fonts and text input, UI
 
 ## Distribution status
 
-The current unstable preview targets CN client `2026.10.06.0000.0000`. Build a complete installer-free package from clean, prepared components:
+This source tree targets CN 7.58. Check the release notes for the supported client in a published binary. Build a complete installer-free package from clean, prepared components:
 
 ```powershell
 ./scripts/build-distribution.ps1 -PayloadDirectory <staged-payload> -AssetDirectory <prepared-assets> -RuntimeDirectory <prepared-runtime> -OutputDirectory artifacts/releases/Moonwake-win-x64

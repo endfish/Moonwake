@@ -12,7 +12,7 @@
 
 Moonwake 附加到已经启动的 FFXIV 客户端，为它加载 Dalamud 核心。无需通过登录器启动游戏；不处理账号、密码、登录或游戏更新。
 
-**目前为不稳定测试版，当前适配国服客户端 `2026.10.06.0000.0000`。** 如遇到启动、注入、更新或插件兼容问题，欢迎随时在 [GitHub Issues](https://github.com/endfish/Moonwake/issues) 提交反馈。请注明 Moonwake 版本、游戏版本、复现步骤及相关错误日志。
+**目前为不稳定测试版。** `v0.2.0-preview.4` 适配国服 7.58（客户端 `2026.11.03.0000.0000`）。如遇到启动、注入、更新或插件兼容问题，欢迎在 [GitHub Issues](https://github.com/endfish/Moonwake/issues) 提交反馈。请注明 Moonwake 版本、游戏版本、复现步骤及相关错误日志。
 
 从 [GitHub Releases](https://github.com/endfish/Moonwake/releases) 下载 `Moonwake-版本号-win-x64.zip`，解压后运行 `Moonwake.exe`。无需安装器或额外安装 .NET；GitHub 自动生成的 Source code 压缩包用于源码构建。
 

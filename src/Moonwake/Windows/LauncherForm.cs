@@ -113,10 +113,11 @@ internal sealed class LauncherForm : Form
         this.processes.AccessibleName = "游戏进程";
         this.processes.DrawItem += (_, e) =>
         {
-            using var fill = new SolidBrush((e.State & DrawItemState.Selected) != 0 && this.processes.DroppedDown
+            if (e.Index < 0 || (e.State & DrawItemState.ComboBoxEdit) != 0) return;
+            using var fill = new SolidBrush((e.State & DrawItemState.Selected) != 0
                 ? Color.FromArgb(35, 53, 64) : this.processes.BackColor);
             e.Graphics.FillRectangle(fill, e.Bounds);
-            var text = e.Index >= 0 ? this.processes.GetItemText(this.processes.Items[e.Index]) : "等待游戏进程…";
+            var text = this.processes.GetItemText(this.processes.Items[e.Index]);
             TextRenderer.DrawText(e.Graphics, text, this.processes.Font,
                 new Rectangle(e.Bounds.X + 12, e.Bounds.Y, e.Bounds.Width - 20, e.Bounds.Height), Foreground,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -308,24 +309,56 @@ internal sealed class LauncherForm : Form
 
     private sealed class ProcessComboBox : ComboBox
     {
-        protected override void WndProc(ref Message m)
+        public ProcessComboBox()
         {
-            base.WndProc(ref m);
-            if (m.Msg is not (0xF or 0x317 or 0x318)) return;
-            using var graphics = m.Msg == 0xF ? Graphics.FromHwnd(this.Handle) : Graphics.FromHdc(m.WParam);
-            var arrowWidth = (int)(30 * this.DeviceDpi / 96F);
+            // Own the closed face so Windows cannot paint a light frame when the selector is disabled.
+            this.SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true);
+        }
+
+        protected override void OnSelectedIndexChanged(EventArgs e)
+        {
+            base.OnSelectedIndexChanged(e);
+            this.Invalidate();
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            this.Invalidate();
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            this.Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var bounds = this.ClientRectangle;
+            if (bounds.Width < 2 || bounds.Height < 2) return;
+            var graphics = e.Graphics;
+            var arrowWidth = this.LogicalToDeviceUnits(30);
+            var padding = this.LogicalToDeviceUnits(16);
             using var fill = new SolidBrush(this.BackColor);
-            graphics.FillRectangle(fill, this.Width - arrowWidth, 0, arrowWidth, this.Height);
-            graphics.FillRectangle(fill, 0, 0, this.Width, 2);
-            graphics.FillRectangle(fill, 0, this.Height - 2, this.Width, 2);
-            graphics.FillRectangle(fill, 0, 0, 2, this.Height);
-            using var border = new Pen(Color.FromArgb(45, 61, 71));
-            graphics.DrawRectangle(border, 0, 0, this.Width - 1, this.Height - 1);
-            using var line = new Pen(Muted, Math.Max(1, this.DeviceDpi / 96F));
-            var x = this.Width - arrowWidth / 2F;
-            var y = this.Height / 2F;
+            graphics.FillRectangle(fill, bounds);
+            var outline = this.Focused && this.ShowFocusCues ? Color.FromArgb(75, 104, 122) : Color.FromArgb(45, 61, 71);
+            using var border = new Pen(outline);
+            graphics.DrawRectangle(border, 0, 0, bounds.Width - 1, bounds.Height - 1);
+
+            var text = this.SelectedIndex >= 0 ? this.GetItemText(this.SelectedItem) : "等待游戏进程…";
+            TextRenderer.DrawText(graphics, text, this.Font,
+                new Rectangle(padding, 0, Math.Max(0, bounds.Width - arrowWidth - padding), bounds.Height),
+                this.Enabled ? this.ForeColor : Muted,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+
+            var scale = this.DeviceDpi / 96F;
+            using var line = new Pen(Muted, Math.Max(1, scale));
+            var x = bounds.Width - arrowWidth / 2F;
+            var y = bounds.Height / 2F;
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.DrawLines(line, new PointF[] { new(x - 4, y - 2), new(x, y + 2), new(x + 4, y - 2) });
+            graphics.DrawLines(line, new PointF[] { new(x - 4 * scale, y - 2 * scale), new(x, y + 2 * scale), new(x + 4 * scale, y - 2 * scale) });
         }
     }
 

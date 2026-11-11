@@ -5,7 +5,6 @@ on:
       tag:
         description: Existing source tag to package
         required: true
-        default: v0.2.0-preview.3
 permissions:
   contents: write
 jobs:
@@ -69,10 +68,11 @@ jobs:
           $vs = & $vswhere -latest -version '[17.0,18.0)' -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $crt = Get-ChildItem -LiteralPath "$vs/VC/Redist/MSVC" -Recurse -Filter vcruntime140.dll | Where-Object { $_.Directory.Name -eq 'Microsoft.VC143.CRT' -and $_.Directory.Parent.Name -eq 'x64' } | Select-Object -First 1
           if (!$crt) { throw 'Visual C++ x64 redistributable not found.' }
-          ./scripts/stage-core.ps1 -Destination artifacts/components/payloads/moonwake-cn-2026.10.06-$($env:RELEASE_TAG.TrimStart('v')) -VCRuntimeDirectory $crt.Directory.FullName
+          $payload = "artifacts/components/payloads/moonwake-cn-$($env:RELEASE_TAG.TrimStart('v'))"
+          ./scripts/stage-core.ps1 -Destination $payload -VCRuntimeDirectory $crt.Directory.FullName
           ./scripts/prepare-resources.ps1 -HomeDirectory artifacts/resources -DotnetRoot $env:MOONWAKE_RUNTIME -RuntimeVersion 10.0.14
           ./scripts/check-localization.ps1 -SourceRoot .build/source/Dalamud -AssetDirectory artifacts/resources/assets/current
-          ./scripts/build-distribution.ps1 -PayloadDirectory artifacts/components/payloads/moonwake-cn-2026.10.06-$($env:RELEASE_TAG.TrimStart('v')) -AssetDirectory artifacts/resources/assets/current -RuntimeDirectory artifacts/resources/runtime -OutputDirectory artifacts/public/Moonwake -ReleaseId $env:RELEASE_TAG.TrimStart('v')
+          ./scripts/build-distribution.ps1 -PayloadDirectory $payload -AssetDirectory artifacts/resources/assets/current -RuntimeDirectory artifacts/resources/runtime -OutputDirectory artifacts/public/Moonwake -ReleaseId $env:RELEASE_TAG.TrimStart('v')
           ./scripts/check-shell.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe
           ./scripts/check-distribution.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe
           ./scripts/check-update-worker.ps1 -Executable artifacts/public/Moonwake/Moonwake.exe

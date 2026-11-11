@@ -19,7 +19,7 @@ internal static class StartupTests
               actualPaths.InstalledPluginsDirectory == Path.Combine(expected, "installedPlugins"),
               "desktop isolates core settings while sharing installed plugins and plugin configuration");
         var configuration = new StandaloneConfiguration();
-        var target = new GameProcessInfo(12345, "test.exe", "2026.10.06.0000.0000", DalamudModuleState.NotLoaded, null, 1);
+        var target = new GameProcessInfo(12345, "test.exe", "2026.11.03.0000.0000", DalamudModuleState.NotLoaded, null, 1);
         var normal = LauncherReadiness.Evaluate(target, configuration, true);
         Check(normal.CanInject && configuration.LoadPluginsByDefault, "adapted client uses ordinary injection with plugin loading enabled");
         Check(!LauncherReadiness.Evaluate(target with { GameVersion = "future-client" }, configuration, true).CanInject, "unadapted future client is not silently injected");

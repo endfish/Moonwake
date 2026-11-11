@@ -26,7 +26,7 @@ var passed = 0;
     paths.EnsureDirectories();
     using var logger = new StandaloneLogger(paths);
     var config = new ConfigurationStore(paths).LoadOrCreate();
-    Assert(config.SupportedGameVersions.SequenceEqual(["2026.10.06.0000.0000"]) && config.LoadPluginsByDefault, "new installs use the adapted client version and normal plugin loading");
+    Assert(config.SupportedGameVersions.SequenceEqual(["2026.11.03.0000.0000"]) && config.LoadPluginsByDefault, "new installs use the adapted client version and normal plugin loading");
     Assert(paths.HomeDirectory == testRoot && !paths.HomeDirectory.Contains("XIVLauncher"), "isolated home selection");
     paths.EnsureConfiguredDirectories(config);
     Assert(!new PayloadValidator(paths).Validate(config).IsValid, "empty resource directories are not considered a prepared installation");

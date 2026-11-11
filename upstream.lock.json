@@ -23,6 +23,15 @@
     "cnFontLayoutReference": {
       "repository": "https://github.com/OtterCorp/FFXIVClientStructs.git",
       "commit": "431278ea821354b54485b5b15aa13f72d74c07fc"
+    },
+    "clientStructsCn758": {
+      "repository": "https://github.com/aers/FFXIVClientStructs.git",
+      "commits": [
+        "0a4c6e73b73e9afcead3147a76cd5d662dc1b876",
+        "c33a4d87f7c191dd88ce4c3e7831a7b57a8342d1",
+        "461db60e8fe6dd91c4807f71b3b4b08459b08f5b"
+      ],
+      "scope": "SetDefaultState, strategy board sharing signatures, and two Beastmaster addon layouts checked against CN 2026.11.03"
     }
   }
 }

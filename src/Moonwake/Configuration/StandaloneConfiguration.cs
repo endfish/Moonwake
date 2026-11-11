@@ -10,7 +10,7 @@ internal sealed class StandaloneConfiguration
 
     public string RuntimeDirectory { get; set; } = "runtime";
 
-    public List<string> SupportedGameVersions { get; set; } = ["2026.10.06.0000.0000"];
+    public List<string> SupportedGameVersions { get; set; } = ["2026.11.03.0000.0000"];
 
     public int PollIntervalSeconds { get; set; } = 2;
 
