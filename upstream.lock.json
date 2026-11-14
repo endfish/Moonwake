@@ -29,9 +29,15 @@
       "commits": [
         "0a4c6e73b73e9afcead3147a76cd5d662dc1b876",
         "c33a4d87f7c191dd88ce4c3e7831a7b57a8342d1",
-        "461db60e8fe6dd91c4807f71b3b4b08459b08f5b"
+        "461db60e8fe6dd91c4807f71b3b4b08459b08f5b",
+        "a6b235258ac1732b545806caea346a60f4711854"
       ],
-      "scope": "SetDefaultState, strategy board sharing signatures, and two Beastmaster addon layouts checked against CN 2026.11.03"
+      "scope": "SetDefaultState, strategy board sharing and text input signatures, two Beastmaster addon layouts, and the map discovery layout checked against CN 2026.11.03"
+    },
+    "cnCultureAliases": {
+      "repository": "https://github.com/OtterCorp/Dalamud.git",
+      "commit": "dca7257f4ef03b3b5eb8873ba98717930c70942f",
+      "scope": "Simplified and Traditional Chinese client language codes for CultureInfo"
     }
   }
 }

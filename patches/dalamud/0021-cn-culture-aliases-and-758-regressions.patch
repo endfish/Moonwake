@@ -1,0 +1,62 @@
+diff --git a/Dalamud/Localization.cs b/Dalamud/Localization.cs
+index 716d7afaf..a7f54bce4 100644
+--- a/Dalamud/Localization.cs
++++ b/Dalamud/Localization.cs
+@@ -66,8 +66,8 @@ public class Localization : IServiceType
+     public static CultureInfo GetCultureInfoFromLangCode(string langCode) =>
+         CultureInfo.GetCultureInfo(langCode switch
+         {
+-            "tw" => "zh-hant",
+-            "zh" => "zh-hans",
++            "tw" or "cht" => "zh-hant",
++            "zh" or "chs" => "zh-hans",
+             _ => langCode,
+         });
+ 
+diff --git a/Dalamud.Test/LocalizationTests.cs b/Dalamud.Test/LocalizationTests.cs
+--- a/Dalamud.Test/LocalizationTests.cs
++++ b/Dalamud.Test/LocalizationTests.cs
+@@ -16,6 +16,15 @@
+             this.localization.LocalizationChanged += code => this.currentLangCode = code;
+         }
+ 
++        [Theory]
++        [InlineData("chs", "zh-Hans")]
++        [InlineData("zh", "zh-Hans")]
++        [InlineData("cht", "zh-Hant")]
++        [InlineData("tw", "zh-Hant")]
++        [InlineData("en", "en")]
++        public void MapsClientLanguageCodesToCultures(string code, string expected)
++            => Assert.Equal(expected, Localization.GetCultureInfoFromLangCode(code).Name);
++
+         [Fact]
+         public void SetupWithFallbacks_EventInvoked()
+         {
+diff --git a/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs b/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs
+--- a/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs
++++ b/Dalamud.Test/Game/UpstreamApiCompatibilityTests.cs
+@@ -5,6 +5,7 @@
+ using Dalamud.Game.Gui.PartyFinder.Types;
+ using Dalamud.Utility;
+ 
++using FFXIVClientStructs.FFXIV.Client.Game;
+ using FFXIVClientStructs.FFXIV.Component.GUI;
+ 
+ using Lumina.Text.ReadOnly;
+@@ -42,6 +43,16 @@
+     }
+ 
+     [Fact]
++    public void MapDiscoveryTableDoesNotOverlapReportCooldown()
++    {
++        var manager = default(MapDiscoveryManager);
++        Assert.Equal(49, manager.MapsWithUpTo32Regions.Length);
++        Assert.Equal(32, Unsafe.SizeOf<MapDiscoveryManager.DiscoveryTable32>());
++        Assert.Equal(0x1040, (int)Marshal.OffsetOf<MapDiscoveryManager>(nameof(MapDiscoveryManager.ReportCooldown)));
++        Assert.Equal(0x1044, Unsafe.SizeOf<MapDiscoveryManager>());
++    }
++
++    [Fact]
+     public void CnFontBuffersMatchTheNativeBuildFontStride()
+     {
+         // Native CN BuildFont multiplies the font index by 0x1A8.
